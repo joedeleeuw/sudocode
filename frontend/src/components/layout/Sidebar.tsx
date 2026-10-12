@@ -9,6 +9,7 @@ import {
   PlayCircle,
   GitBranch,
   Network,
+  Share2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -58,6 +59,12 @@ export default function Sidebar({ open, collapsed, onClose }: SidebarProps) {
       basePath: '/workflows',
       label: 'Workflows',
       icon: Network,
+    },
+    {
+      path: paths.map(),
+      basePath: '/map',
+      label: 'Relationship Map',
+      icon: Share2,
     },
     {
       path: paths.executions(),

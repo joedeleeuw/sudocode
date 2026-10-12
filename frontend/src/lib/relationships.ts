@@ -25,6 +25,18 @@ export const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
 }
 
 /**
+ * Relationship type colors as hex values for WebGL rendering (same hues as RELATIONSHIP_COLORS)
+ */
+export const RELATIONSHIP_HEX_COLORS: Record<RelationshipType, string> = {
+  blocks: '#dc2626',
+  related: '#2563eb',
+  'discovered-from': '#9333ea',
+  implements: '#16a34a',
+  references: '#4b5563',
+  'depends-on': '#ea580c',
+}
+
+/**
  * Get the inverse relationship type for display
  */
 export function getInverseLabel(type: RelationshipType): string {

@@ -110,9 +110,27 @@ function findDatabasePath(): string | null {
 
 /**
  * Initialize database connection
+ *
+ * The database and its tracker directory are resolved together: with --db the
+ * tracker directory is the database's own directory, and a current directory
+ * that belongs to a different tracker rejects the command before any open or
+ * import (importing the wrong JSONL into a database deletes its entities).
  */
 function initDB() {
-  if (!dbPath) {
+  if (dbPath) {
+    outputDir = path.dirname(path.resolve(dbPath));
+    const discovered = findDatabasePath();
+    if (discovered && path.dirname(discovered) !== outputDir) {
+      console.error(
+        chalk.red(
+          `Error: --db names ${path.resolve(dbPath)} (tracker directory ${outputDir}), ` +
+            `but the current directory belongs to tracker ${path.dirname(discovered)}. ` +
+            `Run from that tracker's directory, or drop --db.`
+        )
+      );
+      process.exit(1);
+    }
+  } else {
     const found = findDatabasePath();
     if (found) {
       dbPath = found;

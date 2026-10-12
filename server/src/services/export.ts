@@ -11,37 +11,13 @@
 
 import type Database from "better-sqlite3";
 import { exportToJSONL } from "@sudocode-ai/cli/dist/export.js";
+import { importJSONLIfStale } from "@sudocode-ai/cli/dist/import.js";
 import { syncJSONLToMarkdown } from "@sudocode-ai/cli/dist/sync.js";
 import { getConfig, isMarkdownFirst } from "@sudocode-ai/cli/dist/config.js";
 import { syncFileWithRename } from "@sudocode-ai/cli/dist/filename-generator.js";
 import { getSudocodeDir } from "../utils/sudocode-dir.js";
 import * as fs from "fs";
 import * as path from "path";
-
-// Global debouncer state (keyed by database instance)
-const exportDebouncers = new WeakMap<
-  Database.Database,
-  {
-    timeoutId: NodeJS.Timeout | null;
-    pending: boolean;
-    outputDir?: string;
-  }
->();
-
-/**
- * Initialize or get the export debouncer for a specific database
- */
-function getExportDebouncer(db: Database.Database) {
-  let debouncer = exportDebouncers.get(db);
-  if (!debouncer) {
-    debouncer = {
-      timeoutId: null,
-      pending: false,
-    };
-    exportDebouncers.set(db, debouncer);
-  }
-  return debouncer;
-}
 
 /**
  * Execute the full export (JSONL only)
@@ -102,34 +78,14 @@ export async function syncEntityToMarkdown(
 }
 
 /**
- * Trigger an export to JSONL and Markdown files (debounced)
- * This should be called after any database modifications
- *
- * @param db - Database instance
- * @param outputDir - Optional output directory (defaults to getSudocodeDir())
+ * Fire-and-forget export for non-request paths. Mutating API routes must use
+ * persistMutation instead: only it makes the request fail when the write does
+ * not reach the tracked JSONL.
  */
 export function triggerExport(db: Database.Database, outputDir?: string): void {
-  const debouncer = getExportDebouncer(db);
-  debouncer.pending = true;
-  if (outputDir) {
-    debouncer.outputDir = outputDir;
-  }
-
-  if (debouncer.timeoutId) {
-    clearTimeout(debouncer.timeoutId);
-  }
-
-  debouncer.timeoutId = setTimeout(async () => {
-    try {
-      await executeFullExport(db, debouncer.outputDir);
-    } catch (error) {
-      console.error("Export failed:", error);
-    } finally {
-      // Reset debouncer state after export completes
-      debouncer.pending = false;
-      debouncer.timeoutId = null;
-    }
-  }, 2000); // 2 second debounce
+  executeFullExport(db, outputDir).catch((error) => {
+    console.error("Export failed:", error);
+  });
 }
 
 /**
@@ -143,13 +99,44 @@ export async function executeExportNow(db: Database.Database, outputDir?: string
 }
 
 /**
- * Cleanup the export debouncer (cancel pending exports and reset)
- * Should be called when closing the database or during test cleanup
- *
- * Note: With WeakMap-based debouncers, this is now a no-op since
- * debouncers are automatically garbage collected when the database is closed
+ * Import the tracked JSONL when it holds changes the database has never seen.
+ * Every mutating request reconciles first: applying a mutation to a stale
+ * database would export over the newer JSONL on success.
  */
-export function cleanupExport(): void {
-  // No-op: debouncers are now per-database and will be GC'd automatically
-  // Kept for backward compatibility
+export async function reconcileJSONLBeforeMutation(
+  db: Database.Database,
+  sudocodeDir: string
+): Promise<void> {
+  await importJSONLIfStale(db, sudocodeDir);
 }
+
+/**
+ * Apply a database mutation and persist it to the tracked JSONL, atomically.
+ * The JSONL is reconciled first, then the mutation and the export commit
+ * together: when the export fails the mutation rolls back, so a request only
+ * succeeds once the change has reached the JSONL and no acknowledged
+ * database-only entity is left behind.
+ */
+export async function persistMutation<T>(
+  db: Database.Database,
+  sudocodeDir: string,
+  mutate: () => T
+): Promise<T> {
+  await reconcileJSONLBeforeMutation(db, sudocodeDir);
+  db.prepare("BEGIN").run();
+  try {
+    const result = mutate();
+    await executeFullExport(db, sudocodeDir);
+    db.prepare("COMMIT").run();
+    return result;
+  } catch (error) {
+    db.prepare("ROLLBACK").run();
+    throw error;
+  }
+}
+
+/**
+ * Cleanup after export use (cancel pending work and reset).
+ * Exports are immediate, so there is no pending state to clean up.
+ */
+export function cleanupExport(): void {}

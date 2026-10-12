@@ -74,7 +74,7 @@ The repository is used as the source of truth, and a db is synced and derived fr
 
 Each machine has a local SQLite cache (.sudocode/cache.db) - gitignored
 Source of truth is JSONL (.sudocode/issues/issues.jsonl, .sudocode/specs/specs.jsonl, etc) - committed to git
-Auto-export syncs SQLite → JSONL after CRUD operations (5-second debounce)
+Auto-export syncs SQLite → JSONL on every CRUD operation; server API writes are exported atomically within the request (a failed export fails the request and rolls the write back)
 Auto-import syncs JSONL → SQLite when JSONL is newer (e.g., after git pull)
 Git handles distribution while AI handles merge conflicts.
 

@@ -15,7 +15,7 @@ import {
 import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { getIssueFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastIssueUpdate } from "../services/websocket.js";
-import { triggerExport, executeExportNow, syncEntityToMarkdown } from "../services/export.js";
+import { executeExportNow, persistMutation, reconcileJSONLBeforeMutation, syncEntityToMarkdown } from "../services/export.js";
 import { refreshIssue } from "../services/external-refresh-service.js";
 import * as path from "path";
 import { findExistingEntityFile } from "@sudocode-ai/cli/dist/filename-generator.js";
@@ -105,7 +105,7 @@ export function createIssuesRouter(): Router {
   /**
    * POST /api/issues - Create a new issue
    */
-  router.post("/", (req: Request, res: Response) => {
+  router.post("/", async (req: Request, res: Response) => {
     try {
       const { title, content, status, priority, assignee, parent_id } =
         req.body;
@@ -133,20 +133,23 @@ export function createIssuesRouter(): Router {
       const outputDir = req.project!.sudocodeDir;
       const { id, uuid } = generateIssueId(req.project!.db, outputDir);
 
-      // Create issue using CLI operation
-      const issue = createNewIssue(req.project!.db, {
-        id,
-        uuid,
-        title,
-        content: content || "",
-        status: status || "open",
-        priority: priority !== undefined ? priority : 2,
-        assignee: assignee || undefined,
-        parent_id: parent_id || undefined,
-      });
-
-      // Trigger export to JSONL files
-      triggerExport(req.project!.db, req.project!.sudocodeDir);
+      // Create issue and persist it to the tracked JSONL atomically: the
+      // request fails (and nothing stays in the database) when the export does
+      const issue = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () =>
+          createNewIssue(req.project!.db, {
+            id,
+            uuid,
+            title,
+            content: content || "",
+            status: status || "open",
+            priority: priority !== undefined ? priority : 2,
+            assignee: assignee || undefined,
+            parent_id: parent_id || undefined,
+          })
+      );
 
       // Sync this specific issue to its markdown file (don't wait for it)
       syncEntityToMarkdown(req.project!.db, issue.id, "issue", req.project!.sudocodeDir).catch((error) => {
@@ -232,22 +235,18 @@ export function createIssuesRouter(): Router {
         updateInput.archived_at = archived ? new Date().toISOString() : null;
       }
 
-      // Update issue using CLI operation
-      const issue = updateExistingIssue(req.project!.db, id, updateInput);
+      // Update issue and persist it to the tracked JSONL atomically
+      const issue = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => updateExistingIssue(req.project!.db, id, updateInput)
+      );
 
-      // If integration sync is enabled, export immediately so JSONL is updated before sync
-      // Otherwise use debounced export
+      // Sync to external integrations (JSONL is already up to date)
       if (req.project!.integrationSyncService) {
-        // Execute export now to ensure JSONL is updated before integration sync
-        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
-
-        // Sync to external integrations
         req.project!.integrationSyncService.syncEntity(issue.id).catch((error) => {
           console.error(`Failed to sync issue ${issue.id} to external integrations:`, error);
         });
-      } else {
-        // Trigger debounced export when no integration sync is needed
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
       }
 
       // Sync this specific issue to its markdown file (don't wait for it)
@@ -310,8 +309,12 @@ export function createIssuesRouter(): Router {
       const issuesDir = path.join(req.project!.sudocodeDir, "issues");
       const markdownPath = findExistingEntityFile(id, issuesDir);
 
-      // Delete issue using CLI operation
-      const deleted = deleteExistingIssue(req.project!.db, id);
+      // Delete issue and persist the deletion to the tracked JSONL atomically
+      const deleted = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => deleteExistingIssue(req.project!.db, id)
+      );
 
       if (deleted) {
         // Delete markdown file if it exists
@@ -322,9 +325,6 @@ export function createIssuesRouter(): Router {
             console.warn(`Failed to delete markdown file: ${markdownPath}`, err);
           }
         }
-
-        // Trigger export to JSONL files
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
 
         // Propagate deletion to external systems (if any links exist)
         if (externalLinks.length > 0 && req.project!.integrationSyncService) {
@@ -389,7 +389,8 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Refresh from external source
+      // Reconcile the tracked JSONL before mutating, then refresh from external source
+      await reconcileJSONLBeforeMutation(req.project!.db, req.project!.sudocodeDir);
       const result = await refreshIssue(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -437,8 +438,8 @@ export function createIssuesRouter(): Router {
 
       // Handle successful update
       if (result.updated && result.entity) {
-        // Trigger export to JSONL files
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
+        // Persist to the tracked JSONL; a failed export fails the request
+        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
 
         // Sync to markdown file
         syncEntityToMarkdown(

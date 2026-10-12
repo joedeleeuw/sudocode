@@ -30,7 +30,7 @@ import { createIssue } from "@sudocode-ai/cli/dist/operations/issues.js";
 import { createFeedback } from "@sudocode-ai/cli/dist/operations/feedback.js";
 import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import type { ExternalComment } from "@sudocode-ai/types";
-import { triggerExport, syncEntityToMarkdown } from "../services/export.js";
+import { executeExportNow, syncEntityToMarkdown } from "../services/export.js";
 import { broadcastSpecUpdate } from "../services/websocket.js";
 import {
   bulkRefresh,
@@ -889,9 +889,9 @@ export function createImportRouter(): Router {
       // Clean up provider
       await provider.dispose();
 
-      // Trigger export if any changes were made
+      // Persist the imported entities; a failed export fails the request
       if (created > 0 || updated > 0) {
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
+        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
       }
 
       const response: BatchImportResponse = {
@@ -1089,8 +1089,8 @@ export function createImportRouter(): Router {
         },
       };
 
-      // Trigger export to JSONL files
-      triggerExport(req.project!.db, req.project!.sudocodeDir);
+      // Persist to the tracked JSONL; a failed export fails the request
+      await executeExportNow(req.project!.db, req.project!.sudocodeDir);
 
       // Sync to markdown file (fire and forget)
       const syncPromise = syncEntityToMarkdown(
@@ -1277,9 +1277,9 @@ export function createImportRouter(): Router {
         }
       );
 
-      // Trigger export if any entities were updated
+      // Persist the refreshed entities; a failed export fails the request
       if (result.refreshed > 0) {
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
+        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
       }
 
       res.status(200).json({

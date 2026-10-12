@@ -17,8 +17,9 @@ import { generateUniqueFilename } from "@sudocode-ai/cli/dist/filename-generator
 import { getSpecFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastSpecUpdate } from "../services/websocket.js";
 import {
-  triggerExport,
   executeExportNow,
+  persistMutation,
+  reconcileJSONLBeforeMutation,
   syncEntityToMarkdown,
 } from "../services/export.js";
 import { refreshSpec } from "../services/external-refresh-service.js";
@@ -103,7 +104,7 @@ export function createSpecsRouter(): Router {
   /**
    * POST /api/specs - Create a new spec
    */
-  router.post("/", (req: Request, res: Response) => {
+  router.post("/", async (req: Request, res: Response) => {
     try {
       const { title, content, priority, parent_id } = req.body;
 
@@ -133,19 +134,22 @@ export function createSpecsRouter(): Router {
       // Generate file path for the spec (relative path)
       const file_path = `specs/${generateUniqueFilename(title, id)}`;
 
-      // Create spec using CLI operation
-      const spec = createNewSpec(req.project!.db, {
-        id,
-        uuid,
-        title,
-        file_path,
-        content: content || "",
-        priority: priority !== undefined ? priority : 2,
-        parent_id: parent_id || undefined,
-      });
-
-      // Trigger export to JSONL files
-      triggerExport(req.project!.db, req.project!.sudocodeDir);
+      // Create spec and persist it to the tracked JSONL atomically: the
+      // request fails (and nothing stays in the database) when the export does
+      const spec = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () =>
+          createNewSpec(req.project!.db, {
+            id,
+            uuid,
+            title,
+            file_path,
+            content: content || "",
+            priority: priority !== undefined ? priority : 2,
+            parent_id: parent_id || undefined,
+          })
+      );
 
       // Sync this specific spec to its markdown file (don't wait for it)
       syncEntityToMarkdown(
@@ -224,16 +228,15 @@ export function createSpecsRouter(): Router {
         updateInput.archived_at = archived ? new Date().toISOString() : null;
       }
 
-      // Update spec using CLI operation
-      const spec = updateExistingSpec(req.project!.db, id, updateInput);
+      // Update spec and persist it to the tracked JSONL atomically
+      const spec = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => updateExistingSpec(req.project!.db, id, updateInput)
+      );
 
-      // If integration sync is enabled, export immediately so JSONL is updated before sync
-      // Otherwise use debounced export
+      // Sync to external integrations (JSONL is already up to date)
       if (req.project!.integrationSyncService) {
-        // Execute export now to ensure JSONL is updated before integration sync
-        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
-
-        // Sync to external integrations (for bidirectional/outbound sync)
         req
           .project!.integrationSyncService.syncEntity(spec.id)
           .catch((error) => {
@@ -242,9 +245,6 @@ export function createSpecsRouter(): Router {
               error
             );
           });
-      } else {
-        // Trigger debounced export when no integration sync is needed
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
       }
 
       // Sync this specific spec to its markdown file (don't wait for it)
@@ -313,8 +313,12 @@ export function createSpecsRouter(): Router {
       const specFromJsonl = getSpecFromJsonl(req.project!.sudocodeDir, id);
       const externalLinks = specFromJsonl?.external_links || [];
 
-      // Delete spec using CLI operation
-      const deleted = deleteExistingSpec(req.project!.db, id);
+      // Delete spec and persist the deletion to the tracked JSONL atomically
+      const deleted = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => deleteExistingSpec(req.project!.db, id)
+      );
 
       if (deleted) {
         // Delete markdown file if it exists
@@ -328,9 +332,6 @@ export function createSpecsRouter(): Router {
             );
           }
         }
-
-        // Trigger export to JSONL files
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
 
         // Propagate deletion to external systems (if any links exist)
         if (externalLinks.length > 0 && req.project!.integrationSyncService) {
@@ -403,7 +404,8 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Refresh from external source
+      // Reconcile the tracked JSONL before mutating, then refresh from external source
+      await reconcileJSONLBeforeMutation(req.project!.db, req.project!.sudocodeDir);
       const result = await refreshSpec(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -451,8 +453,8 @@ export function createSpecsRouter(): Router {
 
       // Handle successful update
       if (result.updated && result.entity) {
-        // Trigger export to JSONL files
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
+        // Persist to the tracked JSONL; a failed export fails the request
+        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
 
         // Sync to markdown file
         syncEntityToMarkdown(

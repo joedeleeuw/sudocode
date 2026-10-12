@@ -14,7 +14,7 @@ import {
   getEntityIncomingRelationships,
 } from "../services/relationships.js";
 import { broadcastRelationshipUpdate } from "../services/websocket.js";
-import { triggerExport } from "../services/export.js";
+import { persistMutation } from "../services/export.js";
 
 export function createRelationshipsRouter(): Router {
   const router = Router();
@@ -146,7 +146,7 @@ export function createRelationshipsRouter(): Router {
   /**
    * POST /api/relationships - Create a new relationship
    */
-  router.post("/", (req: Request, res: Response) => {
+  router.post("/", async (req: Request, res: Response) => {
     try {
       const {
         from_id,
@@ -221,21 +221,23 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      // Create relationship using CLI operation
-      const relationship = createRelationship(req.project!.db, {
-        from_id,
-        from_type: from_type as EntityType,
-        to_id,
-        to_type: to_type as EntityType,
-        relationship_type: relationship_type as RelationshipType,
-        metadata: metadata || null,
-      });
+      // Create relationship and persist it to the tracked JSONL atomically
+      const relationship = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () =>
+          createRelationship(req.project!.db, {
+            from_id,
+            from_type: from_type as EntityType,
+            to_id,
+            to_type: to_type as EntityType,
+            relationship_type: relationship_type as RelationshipType,
+            metadata: metadata || null,
+          })
+      );
 
       // Broadcast relationship creation to WebSocket clients
       broadcastRelationshipUpdate(req.project!.id, "created", relationship);
-
-      // Trigger export to sync JSONL files
-      triggerExport(req.project!.db, req.project!.sudocodeDir);
 
       res.status(201).json({
         success: true,
@@ -277,7 +279,7 @@ export function createRelationshipsRouter(): Router {
   /**
    * DELETE /api/relationships - Delete a specific relationship
    */
-  router.delete("/", (req: Request, res: Response) => {
+  router.delete("/", async (req: Request, res: Response) => {
     try {
       const { from_id, from_type, to_id, to_type, relationship_type } =
         req.body;
@@ -328,14 +330,19 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      // Delete relationship using CLI operation
-      const deleted = deleteRelationship(
+      // Delete relationship and persist the deletion to the tracked JSONL atomically
+      const deleted = await persistMutation(
         req.project!.db,
-        from_id,
-        from_type as EntityType,
-        to_id,
-        to_type as EntityType,
-        relationship_type as RelationshipType
+        req.project!.sudocodeDir,
+        () =>
+          deleteRelationship(
+            req.project!.db,
+            from_id,
+            from_type as EntityType,
+            to_id,
+            to_type as EntityType,
+            relationship_type as RelationshipType
+          )
       );
 
       if (deleted) {
@@ -347,9 +354,6 @@ export function createRelationshipsRouter(): Router {
           to_type,
           relationship_type,
         });
-
-        // Trigger export to sync JSONL files
-        triggerExport(req.project!.db, req.project!.sudocodeDir);
 
         res.json({
           success: true,

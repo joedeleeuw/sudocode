@@ -14,6 +14,7 @@ import {
   getAllFeedback,
 } from "../services/feedback.js";
 import { broadcastFeedbackUpdate } from "../services/websocket.js";
+import { persistMutation } from "../services/export.js";
 
 export function createFeedbackRouter(): Router {
   const router = Router();
@@ -101,7 +102,7 @@ export function createFeedbackRouter(): Router {
    * Supports both new fields (from_id, to_id) and legacy fields (issue_id, spec_id)
    * from_id is optional for anonymous feedback
    */
-  router.post("/", (req: Request, res: Response) => {
+  router.post("/", async (req: Request, res: Response) => {
     try {
       const {
         from_id,
@@ -192,16 +193,22 @@ export function createFeedbackRouter(): Router {
         }
       }
 
-      // Create feedback using CLI operation
-      const feedback = createNewFeedback(req.project!.db, {
-        from_id: fromId || undefined,  // Can be undefined for anonymous feedback
-        to_id: toId,
-        feedback_type: feedback_type as FeedbackType,
-        content,
-        agent: agent || undefined,
-        anchor: anchor as FeedbackAnchor | undefined,
-        dismissed: dismissed || false,
-      });
+      // Create feedback and persist it to the tracked JSONL atomically: the
+      // request fails (and nothing stays in the database) when the export does
+      const feedback = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () =>
+          createNewFeedback(req.project!.db, {
+            from_id: fromId || undefined,  // Can be undefined for anonymous feedback
+            to_id: toId,
+            feedback_type: feedback_type as FeedbackType,
+            content,
+            agent: agent || undefined,
+            anchor: anchor as FeedbackAnchor | undefined,
+            dismissed: dismissed || false,
+          })
+      );
 
       // Broadcast feedback creation to WebSocket clients
       broadcastFeedbackUpdate(req.project!.id, "created", feedback);
@@ -246,7 +253,7 @@ export function createFeedbackRouter(): Router {
   /**
    * PUT /api/feedback/:id - Update an existing feedback entry
    */
-  router.put("/:id", (req: Request, res: Response) => {
+  router.put("/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { content, dismissed, anchor } = req.body;
@@ -302,8 +309,12 @@ export function createFeedbackRouter(): Router {
       if (dismissed !== undefined) updateInput.dismissed = dismissed;
       if (anchor !== undefined) updateInput.anchor = anchor as FeedbackAnchor;
 
-      // Update feedback using CLI operation
-      const feedback = updateExistingFeedback(req.project!.db, id, updateInput);
+      // Update feedback and persist it to the tracked JSONL atomically
+      const feedback = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => updateExistingFeedback(req.project!.db, id, updateInput)
+      );
 
       // Broadcast feedback update to WebSocket clients
       broadcastFeedbackUpdate(req.project!.id, "updated", feedback);
@@ -337,7 +348,7 @@ export function createFeedbackRouter(): Router {
   /**
    * DELETE /api/feedback/:id - Delete a feedback entry
    */
-  router.delete("/:id", (req: Request, res: Response) => {
+  router.delete("/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
 
@@ -352,8 +363,12 @@ export function createFeedbackRouter(): Router {
         return;
       }
 
-      // Delete feedback using CLI operation
-      const deleted = deleteExistingFeedback(req.project!.db, id);
+      // Delete feedback and persist the deletion to the tracked JSONL atomically
+      const deleted = await persistMutation(
+        req.project!.db,
+        req.project!.sudocodeDir,
+        () => deleteExistingFeedback(req.project!.db, id)
+      );
 
       if (deleted) {
         // Broadcast feedback deletion to WebSocket clients

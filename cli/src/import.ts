@@ -36,6 +36,7 @@ import {
   deleteFeedback,
 } from "./operations/feedback.js";
 import { transaction } from "./operations/transactions.js";
+import { specToJSONL, issueToJSONL } from "./export.js";
 import * as path from "path";
 import * as fs from "fs";
 import { getConfig, isMarkdownFirst } from "./config.js";
@@ -154,14 +155,35 @@ export function detectChanges<
 }
 
 /**
- * Check if an entity has changed
+ * Serialize an entity in a canonical form for content comparison: object keys
+ * sorted, array order ignored (relationships, tags, feedback and external
+ * links are sets), and null/undefined fields dropped (a missing key and an
+ * explicit null carry the same meaning in JSONL).
  */
-function hasChanged<T extends { updated_at: string }>(
-  existing: T,
-  incoming: T
-): boolean {
-  // Simple comparison based on updated_at timestamp
-  return existing.updated_at !== incoming.updated_at;
+function canonicalContent(value: unknown): string {
+  if (Array.isArray(value)) {
+    const items = value.map(canonicalContent).sort();
+    return `[${items.join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, fieldValue]) => fieldValue !== undefined && fieldValue !== null)
+      .map(([key, fieldValue]) => [key, canonicalContent(fieldValue)] as const)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries
+      .map(([key, serialized]) => `${JSON.stringify(key)}:${serialized}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+/**
+ * Check if an entity has changed by comparing full canonical content, not
+ * updated_at: a JSONL edit or merge that leaves the timestamp untouched is
+ * still a change the database must import.
+ */
+function hasChanged<T>(existing: T, incoming: T): boolean {
+  return canonicalContent(existing) !== canonicalContent(incoming);
 }
 
 /**
@@ -777,9 +799,11 @@ export async function importFromJSONL(
   const incomingSpecs = specsSnapshot.entities;
   const incomingIssues = issuesSnapshot.entities;
 
-  // Get existing data
-  const existingSpecs = listSpecs(db);
-  const existingIssues = listIssues(db);
+  // Get existing data in its canonical JSONL form (relationships, tags,
+  // feedback and external links included), so change detection compares real
+  // content instead of updated_at timestamps.
+  const existingSpecs = listSpecs(db).map((spec) => specToJSONL(db, spec));
+  const existingIssues = listIssues(db).map((issue) => issueToJSONL(db, issue));
 
   // Detect collisions
   const specCollisions = detectCollisions(existingSpecs, incomingSpecs);

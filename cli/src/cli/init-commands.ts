@@ -111,6 +111,7 @@ export async function performInitialization(
   if (!fs.existsSync(localConfigPath)) {
     const localConfig = {
       worktree: {
+        provider: "git",
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,

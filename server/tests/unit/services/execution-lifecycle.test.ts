@@ -774,6 +774,7 @@ function createMockWorktreeManager(options?: {
   branches: string[];
 } {
   const mockConfig: WorktreeConfig = {
+    provider: "git",
     worktreeStoragePath: ".sudocode/worktrees",
     autoCreateBranches: true,
     autoDeleteBranches: false,
@@ -791,9 +792,10 @@ function createMockWorktreeManager(options?: {
     branches: options?.branches || ["main", "develop", "feature/test"],
     currentBranch: options?.currentBranch || "main",
 
-    async createWorktree(params: WorktreeCreateParams): Promise<void> {
+    async createWorktree(params: WorktreeCreateParams): Promise<string> {
       mock.createWorktreeCalls.push(params);
-      // Simulate successful creation
+      // Simulate successful creation at the requested ("git" provider) path
+      return params.worktreePath!;
     },
 
     async ensureWorktreeExists(): Promise<void> {

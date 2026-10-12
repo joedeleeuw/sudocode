@@ -45,14 +45,9 @@ export function BranchSelector({
   const [showBranches, setShowBranches] = useState(true)
   const [showWorktrees, setShowWorktrees] = useState(true)
 
-  // Filter worktrees to only show .sudocode/worktrees
-  const sudocodeWorktrees = useMemo(() => {
-    return worktrees.filter((wt) => wt.worktree_path?.includes('.sudocode/worktrees'))
-  }, [worktrees])
-
   // Combine branches with worktree branches
   const allBranches = useMemo(() => {
-    const worktreeBranches = sudocodeWorktrees
+    const worktreeBranches = worktrees
       .map((wt) => wt.branch_name)
       .filter((branch): branch is string => !!branch)
 
@@ -64,7 +59,7 @@ export function BranchSelector({
       }
     }
     return combined
-  }, [branches, sudocodeWorktrees])
+  }, [branches, worktrees])
 
   // Filter branches based on search term
   const filteredBranches = useMemo(() => {
@@ -78,14 +73,14 @@ export function BranchSelector({
   // Filter worktrees based on search term
   const filteredWorktrees = useMemo(() => {
     if (!searchTerm.trim()) {
-      return sudocodeWorktrees
+      return worktrees
     }
     const search = searchTerm.toLowerCase()
-    return sudocodeWorktrees.filter(
+    return worktrees.filter(
       (wt) =>
         wt.branch_name?.toLowerCase().includes(search) || wt.id?.toLowerCase().includes(search)
     )
-  }, [sudocodeWorktrees, searchTerm])
+  }, [worktrees, searchTerm])
 
   // Check if search term is a valid new branch name (not existing)
   const canCreateNew = useMemo(() => {
@@ -160,7 +155,7 @@ export function BranchSelector({
             />
           </div>
           {/* Visibility toggles */}
-          {sudocodeWorktrees.length > 0 && (
+          {worktrees.length > 0 && (
             <div className="flex items-center gap-3 border-b px-3 py-2">
               <label className="flex cursor-pointer items-center gap-2 text-xs">
                 <Checkbox
@@ -170,7 +165,7 @@ export function BranchSelector({
                 />
                 <span className="font-medium">branches</span>
               </label>
-              {sudocodeWorktrees.length > 0 && (
+              {worktrees.length > 0 && (
                 <label className="flex cursor-pointer items-center gap-2 text-xs">
                   <Checkbox
                     checked={showWorktrees}

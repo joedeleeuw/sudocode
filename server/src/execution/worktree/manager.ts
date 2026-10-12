@@ -33,6 +33,7 @@ import type {
 } from "./types.js";
 import { WorktreeError, WorktreeErrorCode } from "./types.js";
 import { GitCli, type IGitCli } from "./git-cli.js";
+import { wtRemove, wtSwitch } from "./worktrunk-cli.js";
 import { initDatabase } from "@sudocode-ai/cli/dist/db.js";
 import { importFromJSONL } from "@sudocode-ai/cli/dist/import.js";
 import { execSync } from "child_process";
@@ -48,10 +49,10 @@ export interface IWorktreeManager {
    * Create a new worktree for a session
    *
    * @param params - Worktree creation parameters
-   * @returns Promise that resolves when worktree is created
+   * @returns Path of the created worktree (chosen by wt with the "worktrunk" provider)
    * @throws WorktreeError if creation fails
    */
-  createWorktree(params: WorktreeCreateParams): Promise<void>;
+  createWorktree(params: WorktreeCreateParams): Promise<string>;
 
   /**
    * Ensure worktree exists, recreating if necessary
@@ -186,7 +187,7 @@ export class WorktreeManager implements IWorktreeManager {
     return lock;
   }
 
-  async createWorktree(params: WorktreeCreateParams): Promise<void> {
+  async createWorktree(params: WorktreeCreateParams): Promise<string> {
     const {
       repoPath,
       branchName,
@@ -197,22 +198,51 @@ export class WorktreeManager implements IWorktreeManager {
     } = params;
 
     try {
-      // 1. Create branch if requested
-      if (createBranch) {
-        // Use the specified commit SHA, or base branch, or current HEAD commit to branch from
-        const targetCommit =
-          commitSha || baseBranch || (await this.git.getCurrentCommit(repoPath));
-        await this.git.createBranch(repoPath, branchName, targetCommit);
-      }
+      let createdPath: string;
+      if (this.config.provider === "worktrunk") {
+        // wt creates the branch and the worktree at its worktree-path template
+        // and runs the repository's worktrunk hooks
+        createdPath = await wtSwitch(
+          repoPath,
+          branchName,
+          createBranch ? commitSha || baseBranch : null
+        );
+        if (
+          worktreePath !== undefined &&
+          path.resolve(createdPath) !== path.resolve(worktreePath)
+        ) {
+          throw new WorktreeError(
+            `wt created the worktree for ${branchName} at ${createdPath}, but ${worktreePath} was expected ` +
+              "(did the worktrunk worktree-path template change?)",
+            WorktreeErrorCode.INVALID_PATH
+          );
+        }
+      } else {
+        if (worktreePath === undefined) {
+          throw new WorktreeError(
+            'worktreePath is required with the "git" worktree provider',
+            WorktreeErrorCode.INVALID_PATH
+          );
+        }
+        createdPath = worktreePath;
 
-      // 2. Create parent directory if needed
-      const parentDir = path.dirname(worktreePath);
-      if (!fs.existsSync(parentDir)) {
-        fs.mkdirSync(parentDir, { recursive: true });
-      }
+        // 1. Create branch if requested
+        if (createBranch) {
+          // Use the specified commit SHA, or base branch, or current HEAD commit to branch from
+          const targetCommit =
+            commitSha || baseBranch || (await this.git.getCurrentCommit(repoPath));
+          await this.git.createBranch(repoPath, branchName, targetCommit);
+        }
 
-      // 3. Call git worktree add
-      await this.git.worktreeAdd(repoPath, worktreePath, branchName);
+        // 2. Create parent directory if needed
+        const parentDir = path.dirname(worktreePath);
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        // 3. Call git worktree add
+        await this.git.worktreeAdd(repoPath, worktreePath, branchName);
+      }
 
       // 4. Apply sparse-checkout if configured
       if (
@@ -220,15 +250,15 @@ export class WorktreeManager implements IWorktreeManager {
         this.config.sparseCheckoutPatterns
       ) {
         await this.git.configureSparseCheckout(
-          worktreePath,
+          createdPath,
           this.config.sparseCheckoutPatterns
         );
       }
 
       // 5. Validate creation
-      if (!fs.existsSync(worktreePath)) {
+      if (!fs.existsSync(createdPath)) {
         throw new WorktreeError(
-          `Worktree creation succeeded but path does not exist: ${worktreePath}`,
+          `Worktree creation succeeded but path does not exist: ${createdPath}`,
           WorktreeErrorCode.REPOSITORY_ERROR
         );
       }
@@ -237,7 +267,8 @@ export class WorktreeManager implements IWorktreeManager {
       // This is critical for preventing the worktree from modifying the main repository.
       // It creates a local database, syncs JSONL files, and configures Claude to use
       // the local environment. See setupWorktreeEnvironment() for detailed explanation.
-      await this.setupWorktreeEnvironment(repoPath, worktreePath);
+      await this.setupWorktreeEnvironment(repoPath, createdPath);
+      return createdPath;
     } catch (error) {
       if (error instanceof WorktreeError) {
         throw error;
@@ -510,6 +541,15 @@ export class WorktreeManager implements IWorktreeManager {
       const effectiveRepoPath =
         repoPath || (await this.inferRepoPath(worktreePath));
 
+      if (effectiveRepoPath && this.config.provider === "worktrunk") {
+        await this.removeWorktrunkWorktree(
+          effectiveRepoPath,
+          worktreePath,
+          this.config.autoDeleteBranches
+        );
+        return;
+      }
+
       if (!effectiveRepoPath) {
         // Can't determine repo path, just cleanup the directory
         if (fs.existsSync(worktreePath)) {
@@ -651,6 +691,21 @@ export class WorktreeManager implements IWorktreeManager {
   }
 
   /**
+   * Remove a worktree through wt (runs the repository's remove hooks), then
+   * drop git registrations whose directory is already gone
+   */
+  private async removeWorktrunkWorktree(
+    repoPath: string,
+    worktreePath: string,
+    deleteBranch: boolean
+  ): Promise<void> {
+    if (await this.isWorktreeValid(repoPath, worktreePath)) {
+      await wtRemove(repoPath, worktreePath, deleteBranch);
+    }
+    await this.git.worktreePrune(repoPath);
+  }
+
+  /**
    * Recreate a worktree (internal method)
    *
    * @param repoPath - Path to repository
@@ -662,6 +717,19 @@ export class WorktreeManager implements IWorktreeManager {
     branchName: string,
     worktreePath: string
   ): Promise<void> {
+    if (this.config.provider === "worktrunk") {
+      // Keep the branch: it holds the work being resumed
+      await this.removeWorktrunkWorktree(repoPath, worktreePath, false);
+      await this.createWorktree({
+        repoPath,
+        branchName,
+        worktreePath,
+        baseBranch: branchName,
+        createBranch: false,
+      });
+      return;
+    }
+
     // 1. Comprehensive cleanup of existing worktree
     await this.cleanupWorktree(worktreePath, repoPath);
 

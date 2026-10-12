@@ -54,10 +54,7 @@ export function createTestDatabase(): Database.Database {
  */
 export function createMockWorktreeManager(): any {
   return {
-    createWorktree: vi.fn().mockResolvedValue({
-      path: '/tmp/test-worktree',
-      branch: 'test-branch',
-    }),
+    createWorktree: vi.fn().mockResolvedValue('/tmp/test-worktree'),
     removeWorktree: vi.fn().mockResolvedValue(undefined),
     listWorktrees: vi.fn().mockResolvedValue([]),
     listBranches: vi.fn().mockResolvedValue(['main', 'develop', 'test-branch']),

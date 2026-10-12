@@ -1735,6 +1735,7 @@ function createMockWorktreeManager(): IWorktreeManager & {
   };
 } {
   const config: WorktreeConfig = {
+    provider: "git",
     worktreeStoragePath: ".worktrees",
     branchPrefix: "worktree",
     autoCreateBranches: true,
@@ -1746,9 +1747,9 @@ function createMockWorktreeManager(): IWorktreeManager & {
   return {
     getConfig: () => config,
 
-    createWorktree: async (_params: WorktreeCreateParams): Promise<void> => {
-      // Mock: just return success
-      return Promise.resolve();
+    createWorktree: async (params: WorktreeCreateParams): Promise<string> => {
+      // Mock: created at the requested ("git" provider) path
+      return params.worktreePath!;
     },
 
     cleanupWorktree: async (

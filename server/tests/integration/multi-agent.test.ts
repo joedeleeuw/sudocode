@@ -899,8 +899,8 @@ function createMockWorktreeManager(): IWorktreeManager {
       cleanupOrphanedWorktreesOnStartup: false,
     }),
 
-    createWorktree: async (_params: WorktreeCreateParams): Promise<void> => {
-      return Promise.resolve();
+    createWorktree: async (params: WorktreeCreateParams): Promise<string> => {
+      return params.worktreePath!;
     },
 
     cleanupWorktree: async (

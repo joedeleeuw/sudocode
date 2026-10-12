@@ -16,7 +16,10 @@ import {
   WorktreeManager,
   type IWorktreeManager,
 } from "../execution/worktree/manager.js";
-import { getWorktreeConfig } from "../execution/worktree/config.js";
+import {
+  getWorktreeConfig,
+  isManagedWorktree,
+} from "../execution/worktree/config.js";
 import { createExecution, getExecution } from "./executions.js";
 import { randomUUID } from "crypto";
 
@@ -189,14 +192,14 @@ export class ExecutionLifecycleService {
       branchName = targetBranch;
     }
 
-    // Generate worktree path: {repoPath}/{worktreeStoragePath}/{execution-id}
-    const worktreePath = path.join(
-      repoPath,
-      config.worktreeStoragePath,
-      executionId
-    );
+    // Worktree path: {repoPath}/{worktreeStoragePath}/{execution-id} with the
+    // "git" provider; wt's worktree-path template decides with "worktrunk"
+    const requestedPath =
+      config.provider === "worktrunk"
+        ? undefined
+        : path.join(repoPath, config.worktreeStoragePath, executionId);
 
-    let worktreeCreated = false;
+    let worktreePath: string | undefined;
 
     try {
       // Step 1: Capture current commit before creating worktree
@@ -218,15 +221,13 @@ export class ExecutionLifecycleService {
       }
 
       // Step 2: Create worktree
-      await this.worktreeManager.createWorktree({
+      worktreePath = await this.worktreeManager.createWorktree({
         repoPath,
         branchName,
-        worktreePath,
+        worktreePath: requestedPath,
         baseBranch: targetBranch,
         createBranch: config.autoCreateBranches,
       });
-
-      worktreeCreated = true;
 
       // Step 3: Create execution record in database
       const execution = createExecution(this.db, {
@@ -250,7 +251,7 @@ export class ExecutionLifecycleService {
       };
     } catch (error) {
       // If worktree was created but execution creation failed, cleanup worktree
-      if (worktreeCreated) {
+      if (worktreePath !== undefined) {
         try {
           await this.worktreeManager.cleanupWorktree(worktreePath, repoPath);
         } catch (cleanupError) {
@@ -381,26 +382,27 @@ export class ExecutionLifecycleService {
       // List all worktrees from git
       const worktrees = await this.worktreeManager.listWorktrees(repoPath);
 
-      // Filter to worktrees in our storage path
       const managedWorktrees = worktrees.filter((w) =>
-        w.path.includes(config.worktreeStoragePath)
+        isManagedWorktree(config, w)
       );
 
-      // For each managed worktree, check if it has a corresponding execution
+      // For each managed worktree, check if an execution or workflow records it
       for (const worktree of managedWorktrees) {
         const worktreePath = worktree.path;
 
-        // Try to extract execution ID from path
-        // TODO: This requires a reverse query, since its possible for worktrees to exist without executions.
-        const executionId = path.basename(worktreePath);
+        const owner = this.db
+          .prepare(
+            `SELECT id FROM executions WHERE worktree_path = ?
+             UNION ALL
+             SELECT id FROM workflows WHERE worktree_path = ?
+             LIMIT 1`
+          )
+          .get(worktreePath, worktreePath);
 
-        // Check if execution exists in database
-        const execution = getExecution(this.db, executionId);
-
-        if (!execution) {
-          // Orphaned worktree - no execution record exists, cleanup
+        if (!owner) {
+          // Orphaned worktree - no execution or workflow records it, cleanup
           console.log(
-            `Cleaning up orphaned worktree: ${worktreePath} (no execution found)`
+            `Cleaning up orphaned worktree: ${worktreePath} (no execution or workflow found)`
           );
           try {
             await this.worktreeManager.cleanupWorktree(worktreePath, repoPath);
@@ -411,7 +413,7 @@ export class ExecutionLifecycleService {
             );
           }
         }
-        // Worktrees for existing executions (any status) are preserved
+        // Worktrees recorded by executions (any status) or workflows are preserved
       }
     } catch (error) {
       console.error(
@@ -505,19 +507,19 @@ export class ExecutionLifecycleService {
     }
     branchName = finalBranchName;
 
-    // Generate worktree path: {repoPath}/{worktreeStoragePath}/workflow-{workflowId}
-    const worktreePath = path.join(
-      repoPath,
-      config.worktreeStoragePath,
-      `workflow-${workflowId}`
-    );
+    // Worktree path: {repoPath}/{worktreeStoragePath}/workflow-{workflowId} with
+    // the "git" provider; wt's worktree-path template decides with "worktrunk"
+    const requestedPath =
+      config.provider === "worktrunk"
+        ? undefined
+        : path.join(repoPath, config.worktreeStoragePath, `workflow-${workflowId}`);
 
     // Create the worktree
     try {
-      await this.worktreeManager.createWorktree({
+      const worktreePath = await this.worktreeManager.createWorktree({
         repoPath,
         branchName,
-        worktreePath,
+        worktreePath: requestedPath,
         baseBranch,
         createBranch: true, // Always create a new branch for workflows
       });

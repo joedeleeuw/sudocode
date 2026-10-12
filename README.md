@@ -267,6 +267,15 @@ If the editor doesn't open:
 
 This design provides centralized database semantics through distributed git infrastructure.
 
+### Execution Worktrees
+
+Agent executions run in their own git worktree. The `worktree` section of `.sudocode/config.local.json` chooses who creates them:
+
+- `"provider": "git"` (default): `git worktree add` under `worktreeStoragePath` (`.sudocode/worktrees/<execution-id>`).
+- `"provider": "worktrunk"`: [worktrunk](https://worktrunk.dev) creates them with `wt switch --create <branch> --no-cd` and removes them with `wt remove`, so they land at your `worktree-path` (by default sibling `<repo>.<branch>` directories), show up in `wt list`, and run the repository's `.config/wt.toml` hooks. sudocode never passes `--yes`: approve the project's hooks once with `wt config approvals add`, or execution creation fails with wt's approval message.
+
+Execution branches are named `<branchPrefix>/<execution-id>/<title>`. Run `sudocode init-merge-driver` once in any worktree to merge `.sudocode/*.jsonl` entity-by-entity; worktrees share the setting.
+
 ## Development Flow
 
 ### 1. Create a Spec

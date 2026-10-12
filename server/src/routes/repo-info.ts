@@ -6,7 +6,7 @@ import {
 import { GitSyncCli } from "../execution/worktree/git-sync-cli.js";
 import { ConflictDetector } from "../execution/worktree/conflict-detector.js";
 import * as fs from "fs";
-import * as path from "path";
+import { isManagedWorktree } from "../execution/worktree/config.js";
 
 export function createRepoInfoRouter(): Router {
   const router = Router();
@@ -68,58 +68,41 @@ export function createRepoInfoRouter(): Router {
     }
   );
 
-  // Worktrees endpoint - returns all worktrees that actually exist in .sudocode/worktrees/
-  router.get("/worktrees", (req: Request, res: Response): void => {
+  // Worktrees endpoint - returns the git worktrees sudocode manages (see
+  // isManagedWorktree: under worktreeStoragePath, or on our branch prefix with
+  // the "worktrunk" provider), each with the execution that records it
+  router.get("/worktrees", async (req: Request, res: Response): Promise<void> => {
     try {
       const db = req.project!.db;
       const repoPath = req.project!.path;
-      const worktreesDir = path.join(repoPath, ".sudocode", "worktrees");
+      const worktreeManager = req.project!.worktreeManager;
+      const config = worktreeManager.getConfig();
 
-      // Check if worktrees directory exists
-      if (!fs.existsSync(worktreesDir)) {
-        res.json({
-          success: true,
-          data: [],
-        });
-        return;
-      }
+      const managed = (await worktreeManager.listWorktrees(repoPath)).filter(
+        (worktree) => isManagedWorktree(config, worktree)
+      );
 
-      // Read all directories in .sudocode/worktrees/
-      const worktreeDirs = fs
-        .readdirSync(worktreesDir, { withFileTypes: true })
-        .filter((dirent) => dirent.isDirectory())
-        .map((dirent) => dirent.name);
+      const worktrees = managed.map((worktree) => {
+        const execution = db
+          .prepare(
+            `SELECT * FROM executions
+               WHERE worktree_path = ?
+               LIMIT 1`
+          )
+          .get(worktree.path);
 
-      // For each worktree directory, try to find corresponding execution in database
-      const worktrees = worktreeDirs
-        .map((dirName) => {
-          const worktreePath = path.join(worktreesDir, dirName);
-
-          // Find execution by worktree_path
-          const execution = db
-            .prepare(
-              `SELECT * FROM executions
-                 WHERE worktree_path = ?
-                 LIMIT 1`
-            )
-            .get(worktreePath);
-
-          // If execution found, return it; otherwise return basic info
-          if (execution) {
-            return execution;
-          } else {
-            // Worktree exists but no execution record - return minimal info
-            return {
-              id: null,
-              worktree_path: worktreePath,
-              branch_name: dirName,
-              status: "orphaned",
-              created_at: null,
-              updated_at: null,
-            };
+        // Worktree exists but no execution record - return minimal info
+        return (
+          execution ?? {
+            id: null,
+            worktree_path: worktree.path,
+            branch_name: worktree.branch,
+            status: "orphaned",
+            created_at: null,
+            updated_at: null,
           }
-        })
-        .filter((wt) => wt !== null);
+        );
+      });
 
       res.json({
         success: true,

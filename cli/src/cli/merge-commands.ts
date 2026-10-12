@@ -604,21 +604,43 @@ export async function handleMergeDriver(
 }
 
 /**
+ * Path of the repository's shared git config. In a linked worktree (e.g. a
+ * worktrunk lane) `.git` is a file pointing at `<common>/worktrees/<name>`,
+ * whose `commondir` file names the shared git directory that holds `config`.
+ */
+function localGitConfigPath(worktreeRoot: string): string {
+  const dotGit = path.join(worktreeRoot, ".git");
+  if (fs.statSync(dotGit).isDirectory()) {
+    return path.join(dotGit, "config");
+  }
+  const pointer = fs.readFileSync(dotGit, "utf8").trim();
+  const match = /^gitdir: (.+)$/.exec(pointer);
+  if (!match) {
+    throw new Error(`${dotGit} is neither a directory nor a gitdir file`);
+  }
+  const gitDir = path.resolve(worktreeRoot, match[1]);
+  const commonDir = fs
+    .readFileSync(path.join(gitDir, "commondir"), "utf8")
+    .trim();
+  return path.join(path.resolve(gitDir, commonDir), "config");
+}
+
+/**
  * Handle init merge driver setup command
  */
 export async function handleInitMergeDriver(
   options: InitMergeDriverOptions
 ): Promise<void> {
-  const configFile = options.global
-    ? path.join(os.homedir(), ".gitconfig")
-    : path.join(process.cwd(), ".git", "config");
-
   // Check if .git exists (not in global mode)
   if (!options.global && !fs.existsSync(path.join(process.cwd(), ".git"))) {
     console.error(chalk.red("Error: Not in a git repository"));
     console.error("Run this command from a git repository, or use --global");
     process.exit(1);
   }
+
+  const configFile = options.global
+    ? path.join(os.homedir(), ".gitconfig")
+    : localGitConfigPath(process.cwd());
 
   // Add merge driver config
   const configSection = `
@@ -698,16 +720,16 @@ export async function handleInitMergeDriver(
 export async function handleRemoveMergeDriver(
   options: RemoveMergeDriverOptions
 ): Promise<void> {
-  const configFile = options.global
-    ? path.join(os.homedir(), ".gitconfig")
-    : path.join(process.cwd(), ".git", "config");
-
   // Check if .git exists (not in global mode)
   if (!options.global && !fs.existsSync(path.join(process.cwd(), ".git"))) {
     console.error(chalk.red("Error: Not in a git repository"));
     console.error("Run this command from a git repository, or use --global");
     process.exit(1);
   }
+
+  const configFile = options.global
+    ? path.join(os.homedir(), ".gitconfig")
+    : localGitConfigPath(process.cwd());
 
   let removed = false;
 

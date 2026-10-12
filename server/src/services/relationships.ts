@@ -16,6 +16,7 @@ import {
   getOutgoingRelationships,
   getIncomingRelationships,
   getAllRelationships,
+  listRelationships,
   type CreateRelationshipInput,
 } from "@sudocode-ai/cli/dist/operations/relationships.js";
 
@@ -114,4 +115,13 @@ export function getEntityRelationships(
   entity_type: EntityType
 ): { outgoing: Relationship[]; incoming: Relationship[] } {
   return getAllRelationships(db, entity_id, entity_type);
+}
+
+/**
+ * Get every relationship in the project
+ */
+export function getAllProjectRelationships(
+  db: Database.Database
+): Relationship[] {
+  return listRelationships(db);
 }

@@ -196,6 +196,7 @@ export const specsApi = {
  * Relationships API
  */
 export const relationshipsApi = {
+  list: () => get<Relationship[]>('/relationships'),
   getForEntity: (entityId: string, entityType: 'issue' | 'spec') =>
     get<Relationship[] | { outgoing: Relationship[]; incoming: Relationship[] }>(
       `/relationships/${entityType}/${entityId}`

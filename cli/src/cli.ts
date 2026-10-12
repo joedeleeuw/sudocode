@@ -9,6 +9,7 @@ import chalk from "chalk";
 import * as path from "path";
 import * as fs from "fs";
 import { initDatabase } from "./db.js";
+import { importJSONLIfStale } from "./import.js";
 import type Database from "better-sqlite3";
 
 // Import command handlers
@@ -82,16 +83,24 @@ let jsonOutput: boolean = false;
 
 /**
  * Find database path
- * Searches for .sudocode/cache.db in current directory and parent directories
+ * Searches the current directory and its parents for a .sudocode directory
+ * holding a tracker (cache.db, or the git-tracked config/JSONL files a fresh
+ * clone or worktree has before its first cache.db exists)
  */
 function findDatabasePath(): string | null {
   let currentDir = process.cwd();
   const root = path.parse(currentDir).root;
 
   while (currentDir !== root) {
-    const potentialPath = path.join(currentDir, ".sudocode", "cache.db");
-    if (fs.existsSync(potentialPath)) {
-      return potentialPath;
+    const sudocodeDir = path.join(currentDir, ".sudocode");
+    const isTracker = [
+      "cache.db",
+      "config.json",
+      "issues.jsonl",
+      "specs.jsonl",
+    ].some((file) => fs.existsSync(path.join(sudocodeDir, file)));
+    if (isTracker) {
+      return path.join(sudocodeDir, "cache.db");
     }
     currentDir = path.dirname(currentDir);
   }
@@ -127,12 +136,24 @@ function initDB() {
 }
 
 /**
- * Get command context
+ * Get command context. Imports the tracked JSONL first if the database has not
+ * seen its current content (new cache.db in a fresh clone or worktree, or JSONL
+ * changed by git), so no command reads or exports a stale database.
  */
-function getContext() {
+async function getContext() {
   if (!db) {
     console.error(chalk.red("Error: Database not initialized"));
     process.exit(1);
+  }
+  const imported = await importJSONLIfStale(db, outputDir);
+  if (imported) {
+    console.error(
+      chalk.gray(
+        `Imported ${path.join(outputDir, "*.jsonl")} into ${dbPath} ` +
+          `(specs: ${imported.specs.added} added, ${imported.specs.updated} updated, ${imported.specs.deleted} deleted; ` +
+          `issues: ${imported.issues.added} added, ${imported.issues.updated} updated, ${imported.issues.deleted} deleted)`
+      )
+    );
   }
   return { db, outputDir, jsonOutput };
 }
@@ -194,7 +215,7 @@ spec
   .option("--parent <id>", "Parent spec ID")
   .option("--tags <tags>", "Comma-separated tags")
   .action(async (title, options) => {
-    await handleSpecCreate(getContext(), title, options);
+    await handleSpecCreate(await getContext(), title, options);
   });
 
 spec
@@ -205,14 +226,14 @@ spec
   .option("--archived <bool>", "Filter by archive status (true/false)")
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleSpecList(getContext(), options);
+    await handleSpecList(await getContext(), options);
   });
 
 spec
   .command("show <id>")
   .description("Show spec details")
   .action(async (id) => {
-    await handleSpecShow(getContext(), id);
+    await handleSpecShow(await getContext(), id);
   });
 
 spec
@@ -225,14 +246,14 @@ spec
   .option("--tags <tags>", "New comma-separated tags")
   .option("--archived <bool>", "Archive status (true/false)")
   .action(async (id, options) => {
-    await handleSpecUpdate(getContext(), id, options);
+    await handleSpecUpdate(await getContext(), id, options);
   });
 
 spec
   .command("delete <id...>")
   .description("Delete one or more specs")
   .action(async (ids, options) => {
-    await handleSpecDelete(getContext(), ids, options);
+    await handleSpecDelete(await getContext(), ids, options);
   });
 
 spec
@@ -244,7 +265,7 @@ spec
   .option("--type <type>", "Relationship type (blocks, implements, etc.)")
   .option("--format <format>", "Format: inline or newline", "inline")
   .action(async (entityId, referenceId, options) => {
-    await handleAddReference(getContext(), entityId, referenceId, options);
+    await handleAddReference(await getContext(), entityId, referenceId, options);
   });
 
 // ============================================================================
@@ -265,7 +286,7 @@ issue
   .option("--parent <id>", "Parent issue ID")
   .option("--tags <tags>", "Comma-separated tags")
   .action(async (title, options) => {
-    await handleIssueCreate(getContext(), title, options);
+    await handleIssueCreate(await getContext(), title, options);
   });
 
 issue
@@ -278,14 +299,14 @@ issue
   .option("--archived <bool>", "Filter by archive status (true/false)")
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleIssueList(getContext(), options);
+    await handleIssueList(await getContext(), options);
   });
 
 issue
   .command("show <id>")
   .description("Show issue details")
   .action(async (id) => {
-    await handleIssueShow(getContext(), id);
+    await handleIssueShow(await getContext(), id);
   });
 
 issue
@@ -299,7 +320,7 @@ issue
   .option("--parent <id>", "New parent issue ID")
   .option("--archived <bool>", "Archive status (true/false)")
   .action(async (id, options) => {
-    await handleIssueUpdate(getContext(), id, options);
+    await handleIssueUpdate(await getContext(), id, options);
   });
 
 issue
@@ -307,7 +328,7 @@ issue
   .description("Close one or more issues")
   .option("-r, --reason <reason>", "Reason for closing")
   .action(async (ids, options) => {
-    await handleIssueClose(getContext(), ids, options);
+    await handleIssueClose(await getContext(), ids, options);
   });
 
 issue
@@ -318,7 +339,7 @@ issue
     "Permanently delete from database (default: close the issue)"
   )
   .action(async (ids, options) => {
-    await handleIssueDelete(getContext(), ids, options);
+    await handleIssueDelete(await getContext(), ids, options);
   });
 
 issue
@@ -331,7 +352,7 @@ issue
   .option("--format <format>", "Format: inline or newline", "inline")
   .option("--position <position>", "Position: before or after", "after")
   .action(async (entityId, referenceId, options) => {
-    await handleAddReference(getContext(), entityId, referenceId, options);
+    await handleAddReference(await getContext(), entityId, referenceId, options);
   });
 
 // ============================================================================
@@ -343,7 +364,7 @@ program
   .description("Create a relationship between entities")
   .option("-t, --type <type>", "Relationship type", "references")
   .action(async (from, to, options) => {
-    await handleLink(getContext(), from, to, options);
+    await handleLink(await getContext(), from, to, options);
   });
 
 // ============================================================================
@@ -354,14 +375,14 @@ program
   .command("ready")
   .description("Show ready issues (no blockers)")
   .action(async (options) => {
-    await handleReady(getContext(), options);
+    await handleReady(await getContext(), options);
   });
 
 program
   .command("blocked")
   .description("Show blocked issues")
   .action(async (options) => {
-    await handleBlocked(getContext(), options);
+    await handleBlocked(await getContext(), options);
   });
 
 // ============================================================================
@@ -373,14 +394,14 @@ program
   .description("Show project status summary")
   .option("-v, --verbose", "Show detailed status")
   .action(async (options) => {
-    await handleStatus(getContext(), options);
+    await handleStatus(await getContext(), options);
   });
 
 program
   .command("stats")
   .description("Show detailed project statistics")
   .action(async (options) => {
-    await handleStats(getContext(), options);
+    await handleStats(await getContext(), options);
   });
 
 // ============================================================================
@@ -395,21 +416,21 @@ config
   .command("get [key]")
   .description("Get config value (or show all if no key)")
   .action(async (key) => {
-    await handleConfigGet(getContext(), key, { jsonOutput });
+    await handleConfigGet(await getContext(), key, { jsonOutput });
   });
 
 config
   .command("set <key> <value>")
   .description("Set config value")
   .action(async (key, value) => {
-    await handleConfigSet(getContext(), key, value, { jsonOutput });
+    await handleConfigSet(await getContext(), key, value, { jsonOutput });
   });
 
 config
   .command("show")
   .description("Show current source of truth configuration")
   .action(async () => {
-    await handleConfigShow(getContext(), { jsonOutput });
+    await handleConfigShow(await getContext(), { jsonOutput });
   });
 
 // ============================================================================
@@ -433,7 +454,7 @@ feedback
   .option("-c, --content <text>", "Feedback content (required)")
   .option("-a, --agent <name>", "Agent name")
   .action(async (targetId, issueId, options) => {
-    await handleFeedbackAdd(getContext(), issueId, targetId, options);
+    await handleFeedbackAdd(await getContext(), issueId, targetId, options);
   });
 
 feedback
@@ -448,14 +469,14 @@ feedback
   )
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleFeedbackList(getContext(), options);
+    await handleFeedbackList(await getContext(), options);
   });
 
 feedback
   .command("show <id>")
   .description("Show detailed feedback information")
   .action(async (id) => {
-    await handleFeedbackShow(getContext(), id);
+    await handleFeedbackShow(await getContext(), id);
   });
 
 feedback
@@ -463,14 +484,14 @@ feedback
   .description("Dismiss feedback")
   .option("-c, --comment <text>", "Optional comment")
   .action(async (id) => {
-    await handleFeedbackDismiss(getContext(), id);
+    await handleFeedbackDismiss(await getContext(), id);
   });
 
 feedback
   .command("stale")
   .description("List all stale feedback anchors")
   .action(async () => {
-    await handleFeedbackStale(getContext());
+    await handleFeedbackStale(await getContext());
   });
 
 feedback
@@ -478,7 +499,7 @@ feedback
   .description("Manually relocate a stale anchor")
   .option("-l, --line <number>", "New line number (required)")
   .action(async (id, options) => {
-    await handleFeedbackRelocate(getContext(), id, options);
+    await handleFeedbackRelocate(await getContext(), id, options);
   });
 
 // ============================================================================
@@ -492,7 +513,7 @@ program
   .option("--from-markdown", "Sync from markdown to database")
   .option("--to-markdown", "Sync from database to markdown")
   .action(async (options) => {
-    await handleSync(getContext(), options);
+    await handleSync(await getContext(), options);
   });
 
 program
@@ -500,7 +521,7 @@ program
   .description("Export database to JSONL")
   .option("-o, --output <dir>", "Output directory", ".sudocode")
   .action(async (options) => {
-    await handleExport(getContext(), options);
+    await handleExport(await getContext(), options);
   });
 
 program
@@ -508,7 +529,7 @@ program
   .description("Import from JSONL to database")
   .option("-i, --input <dir>", "Input directory", ".sudocode")
   .action(async (options) => {
-    await handleImport(getContext(), options);
+    await handleImport(await getContext(), options);
   });
 
 // ============================================================================
@@ -521,7 +542,7 @@ program
   .option("-p, --port <port>", "Port to run server on")
   .option("-d, --detach", "Run server in background")
   .action(async (options) => {
-    await handleServerStart(getContext(), options);
+    await handleServerStart(await getContext(), options);
   });
 
 // ============================================================================
@@ -555,7 +576,7 @@ program
   .option("--verbose", "Show detailed resolution information")
   .action(async (options) => {
     initDB();
-    await handleResolveConflicts(getContext(), options);
+    await handleResolveConflicts(await getContext(), options);
   });
 
 program
@@ -612,7 +633,7 @@ plugin
   .description("List available integration plugins")
   .option("-a, --all", "Show all plugins including not installed")
   .action(async (options) => {
-    await handlePluginList(getContext(), options);
+    await handlePluginList(await getContext(), options);
   });
 
 plugin
@@ -620,7 +641,7 @@ plugin
   .description("Install an integration plugin")
   .option("-g, --global", "Install globally")
   .action(async (name, options) => {
-    await handlePluginInstall(getContext(), name, options);
+    await handlePluginInstall(await getContext(), name, options);
   });
 
 plugin
@@ -628,14 +649,14 @@ plugin
   .description("Uninstall an integration plugin")
   .option("-g, --global", "Uninstall globally")
   .action(async (name, options) => {
-    await handlePluginUninstall(getContext(), name, options);
+    await handlePluginUninstall(await getContext(), name, options);
   });
 
 plugin
   .command("status")
   .description("Show status of installed plugins")
   .action(async () => {
-    await handlePluginStatus(getContext());
+    await handlePluginStatus(await getContext());
   });
 
 plugin
@@ -655,7 +676,7 @@ plugin
   )
   .option("--test", "Run connection test after configuration")
   .action(async (name, options) => {
-    await handlePluginConfigure(getContext(), name, {
+    await handlePluginConfigure(await getContext(), name, {
       set: options.set,
       options: options.options,
       enable: options.enable,
@@ -671,14 +692,14 @@ plugin
   .command("test <name>")
   .description("Test a plugin's connection/setup")
   .action(async (name) => {
-    await handlePluginTest(getContext(), name);
+    await handlePluginTest(await getContext(), name);
   });
 
 plugin
   .command("info <name>")
   .description("Show detailed information about a plugin")
   .action(async (name) => {
-    await handlePluginInfo(getContext(), name);
+    await handlePluginInfo(await getContext(), name);
   });
 
 // ============================================================================
@@ -695,7 +716,7 @@ auth
   .option("-f, --force", "Overwrite existing token without confirmation")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClaudeCommand(getContext(), options);
+    await handleAuthClaudeCommand(await getContext(), options);
   });
 
 auth
@@ -703,7 +724,7 @@ auth
   .description("Check authentication status for all services")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthStatusCommand(getContext(), options);
+    await handleAuthStatusCommand(await getContext(), options);
   });
 
 auth
@@ -712,7 +733,7 @@ auth
   .option("-f, --force", "Skip confirmation prompt")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClearCommand(getContext(), options);
+    await handleAuthClearCommand(await getContext(), options);
   });
 
 // ============================================================================
@@ -740,7 +761,7 @@ codespaces
   .option('--retention <days>', 'Retention period in days', parseInt)
   .option('--dev', 'Spawn in development mode (uses local sudocode packages)')
   .action(async (options) => {
-    await handleRemoteSpawn(getContext(), 'codespaces', options);
+    await handleRemoteSpawn(await getContext(), 'codespaces', options);
   });
 
 codespaces
@@ -753,21 +774,21 @@ codespaces
   .option('--port <number>', 'Server port', parseInt)
   .option('--reset', 'Reset to defaults')
   .action(async (options) => {
-    await handleRemoteConfig(getContext(), 'codespaces', options);
+    await handleRemoteConfig(await getContext(), 'codespaces', options);
   });
 
 codespaces
   .command('list')
   .description('List all codespaces deployments')
   .action(async () => {
-    await handleRemoteList(getContext(), 'codespaces');
+    await handleRemoteList(await getContext(), 'codespaces');
   });
 
 codespaces
   .command('status <id>')
   .description('Get codespaces deployment status')
   .action(async (id) => {
-    await handleRemoteStatus(getContext(), 'codespaces', id);
+    await handleRemoteStatus(await getContext(), 'codespaces', id);
   });
 
 codespaces
@@ -775,7 +796,7 @@ codespaces
   .description('Stop a codespaces deployment')
   .option('-f, --force', 'Skip confirmation')
   .action(async (id, options) => {
-    await handleRemoteStop(getContext(), 'codespaces', id, options);
+    await handleRemoteStop(await getContext(), 'codespaces', id, options);
   });
 
 // Coder provider (not yet supported)
@@ -828,8 +849,15 @@ coder
     process.exit(1);
   });
 
-// Parse arguments
-program.parse(process.argv);
+// Parse arguments. Async actions reject on errors raised outside a handler's own
+// try/catch (e.g. a stale-JSONL import failure in getContext): report and fail.
+program.parseAsync(process.argv).catch((error: unknown) => {
+  console.error(
+    chalk.red("Error:"),
+    error instanceof Error ? error.message : String(error)
+  );
+  process.exit(1);
+});
 
 // Check for updates (non-blocking)
 // Skip for update and server commands (server handles it explicitly)

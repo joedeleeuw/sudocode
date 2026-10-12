@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import { ProjectRegistry } from "./project-registry.js";
 import { ProjectContext } from "./project-context.js";
 import { initDatabase } from "./db.js";
+import { importJSONLIfStale } from "@sudocode-ai/cli/dist/import.js";
 import { ExecutionService } from "./execution-service.js";
 import { ExecutionLogsStore } from "./execution-logs-store.js";
 import { ExecutionLifecycleService } from "./execution-lifecycle.js";
@@ -96,9 +97,22 @@ export class ProjectManager {
 
       // 4. Initialize database (check cache first)
       const db = await this.getOrCreateDatabase(projectId, projectPath);
+      const sudocodeDir = path.join(projectPath, ".sudocode");
+
+      // 4b. Import the tracked JSONL if the database has not seen its current
+      // content (new cache.db in a fresh clone or worktree, or JSONL changed by
+      // git while the project was closed). Failing here fails the open: serving
+      // a stale database would export over the JSONL on the first write.
+      const imported = await importJSONLIfStale(db, sudocodeDir);
+      if (imported) {
+        console.log(
+          `[project-manager] Imported JSONL into ${projectId}: ` +
+            `specs ${imported.specs.added} added/${imported.specs.updated} updated/${imported.specs.deleted} deleted, ` +
+            `issues ${imported.issues.added} added/${imported.issues.updated} updated/${imported.issues.deleted} deleted`
+        );
+      }
 
       // 5. Initialize all services for this project
-      const sudocodeDir = path.join(projectPath, ".sudocode");
       const logsStore = new ExecutionLogsStore(db);
       const worktreeConfig = getWorktreeConfig(projectPath);
       const worktreeManager = new WorktreeManager(worktreeConfig);
@@ -512,12 +526,15 @@ export class ProjectManager {
       });
     }
 
-    // Check that cache.db exists
-    const dbPath = path.join(sudocodeDir, "cache.db");
-    if (!fs.existsSync(dbPath)) {
+    // A fresh clone or worktree has the git-tracked tracker files but no
+    // cache.db yet; openProject creates the database and imports the JSONL.
+    const isTracker = ["cache.db", "config.json", "issues.jsonl", "specs.jsonl"].some(
+      (file) => fs.existsSync(path.join(sudocodeDir, file))
+    );
+    if (!isTracker) {
       return Err({
         type: "INVALID_PROJECT",
-        message: `Missing cache.db file: ${dbPath}`,
+        message: `No sudocode tracker in ${sudocodeDir} (expected cache.db, config.json, issues.jsonl or specs.jsonl)`,
       });
     }
 

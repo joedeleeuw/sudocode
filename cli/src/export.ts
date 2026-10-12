@@ -17,7 +17,13 @@ import { listIssues } from "./operations/issues.js";
 import { getOutgoingRelationships } from "./operations/relationships.js";
 import { getTags } from "./operations/tags.js";
 import { listFeedback } from "./operations/feedback.js";
-import { writeJSONL, readJSONLSync } from "./jsonl.js";
+import { writeJSONL } from "./jsonl.js";
+import {
+  readJSONLSnapshot,
+  isJSONLSynced,
+  recordJSONLSync,
+  type JSONLSnapshot,
+} from "./jsonl-sync-state.js";
 
 export interface ExportOptions {
   /**
@@ -214,20 +220,59 @@ export function exportIssuesToJSONL(
 }
 
 /**
- * Read existing external_links from a JSONL file
- * Returns a map of entity ID to external_links array
+ * Map entity ID to external_links from JSONL entities
+ * (to preserve them since SQLite doesn't store them)
  */
-function readExistingExternalLinks<T extends { id: string; external_links?: ExternalLink[] }>(
-  filePath: string
+function externalLinksById(
+  entities: Array<{ id: string; external_links?: ExternalLink[] }>
 ): Map<string, ExternalLink[]> {
   const map = new Map<string, ExternalLink[]>();
-  const entities = readJSONLSync<T>(filePath, { skipErrors: true });
   for (const entity of entities) {
     if (entity.external_links && entity.external_links.length > 0) {
       map.set(entity.id, entity.external_links);
     }
   }
   return map;
+}
+
+/**
+ * IDs of JSONL entities the database has never imported. None when the
+ * database last imported or exported this exact file content: anything
+ * missing from the database then was deleted on purpose.
+ */
+function unimportedIds(
+  db: Database.Database,
+  snapshot: JSONLSnapshot<{ id: string; uuid: string }>,
+  dbEntities: Array<{ uuid: string }>
+): string[] {
+  if (isJSONLSynced(db, snapshot)) {
+    return [];
+  }
+  const known = new Set(dbEntities.map((entity) => entity.uuid));
+  return snapshot.entities
+    .filter((entity) => !known.has(entity.uuid))
+    .map((entity) => entity.id);
+}
+
+/**
+ * Thrown instead of exporting when the export would delete JSONL entities the
+ * database never imported (fresh clone/worktree, or JSONL changed by git).
+ */
+export class UnimportedJSONLEntitiesError extends Error {
+  constructor(readonly unimported: Array<{ filePath: string; ids: string[] }>) {
+    super(
+      "Refusing to export: " +
+        unimported
+          .map(
+            ({ filePath, ids }) =>
+              `${filePath} has ${ids.length} entities the database never imported (${ids.join(", ")})`
+          )
+          .join("; ") +
+        ". Exporting would delete them from the JSONL. Run `sudocode import` (or restart the server) " +
+        "to load the JSONL first; import makes the database match the JSONL."
+    );
+    this.name = "UnimportedJSONLEntitiesError";
+  }
 }
 
 /**
@@ -247,17 +292,40 @@ export async function exportToJSONL(
   const specsPath = `${outputDir}/${specsFile}`;
   const issuesPath = `${outputDir}/${issuesFile}`;
 
-  // Read existing external_links from JSONL files (to preserve them since SQLite doesn't store them)
-  const existingSpecLinks = readExistingExternalLinks<SpecJSONL>(specsPath);
-  const existingIssueLinks = readExistingExternalLinks<IssueJSONL>(issuesPath);
+  const existingSpecs = readJSONLSnapshot<SpecJSONL>(specsPath);
+  const existingIssues = readJSONLSnapshot<IssueJSONL>(issuesPath);
+
+  const unimported = [
+    {
+      filePath: specsPath,
+      ids: unimportedIds(db, existingSpecs, listSpecs(db)),
+    },
+    {
+      filePath: issuesPath,
+      ids: unimportedIds(db, existingIssues, listIssues(db)),
+    },
+  ].filter(({ ids }) => ids.length > 0);
+  if (unimported.length > 0) {
+    throw new UnimportedJSONLEntitiesError(unimported);
+  }
 
   // Export specs with preserved external_links
-  const specs = exportSpecsToJSONL(db, options, existingSpecLinks);
+  const specs = exportSpecsToJSONL(
+    db,
+    options,
+    externalLinksById(existingSpecs.entities)
+  );
   await writeJSONL(specsPath, specs);
+  recordJSONLSync(db, readJSONLSnapshot(specsPath));
 
   // Export issues with preserved external_links
-  const issues = exportIssuesToJSONL(db, options, existingIssueLinks);
+  const issues = exportIssuesToJSONL(
+    db,
+    options,
+    externalLinksById(existingIssues.entities)
+  );
   await writeJSONL(issuesPath, issues);
+  recordJSONLSync(db, readJSONLSnapshot(issuesPath));
 
   return {
     specsCount: specs.length,

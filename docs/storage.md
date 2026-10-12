@@ -491,16 +491,17 @@ async function updateIssue(id: string, updates: Record<string, any>): Promise<vo
 }
 ```
 
-#### 3. JSONL → SQLite (After git pull)
+#### 3. JSONL → SQLite (fresh clone or worktree, after git pull/merge/checkout)
 
-**Trigger**: User runs `sudocode sync` or automatic after git operations
+**Trigger**: automatic. `cache.db` records the SHA-256 of each JSONL file as it last imported or exported it (table `jsonl_sync_state`). Every CLI command that uses the database, and the server when it opens a project, first compares those digests with the files on disk and imports when they differ. A newly created `cache.db` has no recorded digests, so a fresh clone or worktree imports the tracked JSONL before its first read or write. The server's file watcher imports JSONL changes while it runs.
 
 **Process**:
-1. Detect JSONL file changes (compare mtime or hash)
-2. Load all JSONL entries
-3. Compare with SQLite (detect additions, updates, deletions)
-4. Apply changes with collision resolution
-5. Optionally update markdown files
+1. Read each JSONL file and its digest; a malformed line (e.g. a merge-conflict marker) is an error, never skipped
+2. If a JSONL file is missing while the database holds entities of that kind, stop with an error instead of deleting them
+3. Compare with SQLite (detect additions, updates, deletions) and apply changes with collision resolution
+4. Record the imported digests
+
+**Export guard**: before writing, export checks each JSONL file against its recorded digest. If the file changed since the database last saw it and contains entities missing from the database, the export is refused (`UnimportedJSONLEntitiesError`, listing the IDs) instead of deleting them. Run `sudocode import` (or restart the server) to load the JSONL; import makes the database match the JSONL, so database-only changes that were never exported are replaced.
 
 **Implementation**:
 ```typescript

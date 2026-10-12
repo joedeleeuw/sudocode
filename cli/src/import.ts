@@ -4,7 +4,11 @@
 
 import type Database from "better-sqlite3";
 import type { SpecJSONL, IssueJSONL } from "@sudocode-ai/types";
-import { readJSONL } from "./jsonl.js";
+import {
+  readJSONLSnapshot,
+  isJSONLSynced,
+  recordJSONLSync,
+} from "./jsonl-sync-state.js";
 import {
   listSpecs,
   createSpec,
@@ -762,16 +766,16 @@ export async function importFromJSONL(
     );
   }
 
-  const specsPath = path.join(inputDir, specsFile);
-  const issuesPath = path.join(inputDir, issuesFile);
-
-  // Read JSONL files
-  const incomingSpecs = await readJSONL<SpecJSONL>(specsPath, {
-    skipErrors: true,
-  });
-  const incomingIssues = await readJSONL<IssueJSONL>(issuesPath, {
-    skipErrors: true,
-  });
+  // Read JSONL files. Malformed lines throw instead of being skipped: a skipped
+  // line would look like a deleted entity and be removed from the database.
+  const specsSnapshot = readJSONLSnapshot<SpecJSONL>(
+    path.join(inputDir, specsFile)
+  );
+  const issuesSnapshot = readJSONLSnapshot<IssueJSONL>(
+    path.join(inputDir, issuesFile)
+  );
+  const incomingSpecs = specsSnapshot.entities;
+  const incomingIssues = issuesSnapshot.entities;
 
   // Get existing data
   const existingSpecs = listSpecs(db);
@@ -979,6 +983,9 @@ export async function importFromJSONL(
       // The renumbered entity is imported with its new ID
       // References within the imported data should already be using the correct IDs
       // Updating all references globally would incorrectly change references to the local entity
+
+      recordJSONLSync(db, specsSnapshot);
+      recordJSONLSync(db, issuesSnapshot);
     });
 
     // Clean up markdown files for deleted entities (after successful DB transaction)
@@ -1008,4 +1015,38 @@ export async function importFromJSONL(
   }
 
   return result;
+}
+
+/**
+ * Import the tracked JSONL into the database unless the database already holds
+ * exactly its current content. Covers a newly created cache.db (fresh clone or
+ * worktree) and JSONL changed underneath the database by git. Must run before
+ * anything reads or writes the database; returns null when nothing was stale.
+ */
+export async function importJSONLIfStale(
+  db: Database.Database,
+  sudocodeDir: string
+): Promise<ImportResult | null> {
+  const specs = readJSONLSnapshot(path.join(sudocodeDir, "specs.jsonl"));
+  const issues = readJSONLSnapshot(path.join(sudocodeDir, "issues.jsonl"));
+  if (isJSONLSynced(db, specs) && isJSONLSynced(db, issues)) {
+    return null;
+  }
+
+  // A missing file is not an empty tracker: importing it would delete every
+  // entity of that kind from the database.
+  const held = [
+    { kind: "specs", snapshot: specs, count: listSpecs(db).length },
+    { kind: "issues", snapshot: issues, count: listIssues(db).length },
+  ];
+  for (const { kind, snapshot, count } of held) {
+    if (snapshot.sha256 === null && count > 0) {
+      throw new Error(
+        `${snapshot.filePath} is missing but the database holds ${count} ${kind}. ` +
+          `Restore the file (git checkout -- ${snapshot.filePath}), or delete .sudocode/cache.db to rebuild the database from the JSONL that exists.`
+      );
+    }
+  }
+
+  return importFromJSONL(db, { inputDir: sudocodeDir });
 }

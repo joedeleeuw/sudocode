@@ -263,6 +263,18 @@ CREATE TABLE IF NOT EXISTS workflow_events (
 );
 `;
 
+// JSONL sync state - SHA-256 of each tracked JSONL file as this database last
+// imported or exported it. A file whose current digest differs (or has no row)
+// holds changes the database has not seen, so it must be imported before the
+// database is read or exported over it. sha256 is NULL when the file was absent.
+export const JSONL_SYNC_STATE_TABLE = `
+CREATE TABLE IF NOT EXISTS jsonl_sync_state (
+    file_path TEXT PRIMARY KEY,
+    sha256 TEXT,
+    synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 /**
  * Index definitions
  */
@@ -424,6 +436,7 @@ export const ALL_TABLES = [
   EXECUTION_LOGS_TABLE,
   WORKFLOWS_TABLE,
   WORKFLOW_EVENTS_TABLE,
+  JSONL_SYNC_STATE_TABLE,
 ];
 
 export const ALL_INDEXES = [

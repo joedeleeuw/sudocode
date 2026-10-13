@@ -11,13 +11,12 @@ import {
   updateSpec,
   listSpecs,
 } from "@sudocode-ai/cli/dist/operations/specs.js";
-import { listIssues } from "@sudocode-ai/cli/dist/operations/issues.js";
 import {
   createFeedback,
   listFeedback,
   deleteFeedback,
 } from "@sudocode-ai/cli/dist/operations/feedback.js";
-import { addRelationship } from "@sudocode-ai/cli/dist/operations/relationships.js";
+import { importExternalRelationships } from "@sudocode-ai/cli/dist/operations/external-relationships.js";
 import { setTags } from "@sudocode-ai/cli/dist/operations/tags.js";
 import { generateSpecId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { generateUniqueFilename } from "@sudocode-ai/cli/dist/filename-generator.js";
@@ -90,30 +89,12 @@ export function importExternalSpec(
           file_path: `specs/${generateUniqueFilename(entity.title, identity.id)}`,
         });
     if (options.tags) setTags(database, spec.id, "spec", options.tags);
-    for (const relationship of entity.relationships ?? []) {
-      const candidates =
-        relationship.targetType === "spec"
-          ? listSpecs(database)
-          : listIssues(database);
-      const target = candidates.find((candidate) =>
-        candidate.external_links?.some(
-          (link) =>
-            link.provider === provider &&
-            link.external_id === relationship.targetId,
-        ),
-      );
-      if (!target)
-        throw new Error(
-          `${entity.id}.relationships.targetId: missing ${relationship.targetId}`,
-        );
-      addRelationship(database, {
-        from_id: spec.id,
-        from_type: "spec",
-        to_id: target.id,
-        to_type: relationship.targetType,
-        relationship_type: relationship.relationshipType,
-      });
-    }
+    importExternalRelationships(database, {
+      id: spec.id,
+      type: "spec",
+      provider,
+      entity,
+    });
     const agent = `import:${provider}:${entity.id}`;
     if (comments) {
       for (const feedback of listFeedback(database, { to_id: spec.id })) {

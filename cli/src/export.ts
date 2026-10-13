@@ -82,34 +82,29 @@ function sortExternalLinks(
   });
 }
 
-function feedbackForEntity(
-  db: Database.Database,
-  entityId: string,
-  entityType: "spec" | "issue",
-) {
-  return sortFeedback(
-    listFeedback(db)
-      .filter((feedback) =>
-        feedback.from_id
-          ? entityType === "issue" && feedback.from_id === entityId
-          : feedback.to_id === entityId,
-      )
-      .map((feedback) => ({
-        id: feedback.id,
-        from_id: feedback.from_id || undefined,
-        to_id: feedback.to_id,
-        feedback_type: feedback.feedback_type,
-        content: feedback.content,
-        agent: feedback.agent,
-        anchor:
-          typeof feedback.anchor === "string"
-            ? JSON.parse(feedback.anchor)
-            : feedback.anchor,
-        dismissed: feedback.dismissed,
-        created_at: feedback.created_at,
-        updated_at: feedback.updated_at,
-      })),
-  );
+export function groupFeedback(db: Database.Database) {
+  const feedbackByOwner = new Map<string, FeedbackJSONL[]>();
+  for (const feedback of listFeedback(db)) {
+    const owner = feedback.from_id || feedback.to_id;
+    const owned = feedbackByOwner.get(owner) ?? [];
+    owned.push({
+      id: feedback.id,
+      from_id: feedback.from_id || undefined,
+      to_id: feedback.to_id,
+      feedback_type: feedback.feedback_type,
+      content: feedback.content,
+      agent: feedback.agent,
+      anchor:
+        typeof feedback.anchor === "string"
+          ? JSON.parse(feedback.anchor)
+          : feedback.anchor,
+      dismissed: feedback.dismissed,
+      created_at: feedback.created_at,
+      updated_at: feedback.updated_at,
+    });
+    feedbackByOwner.set(owner, owned);
+  }
+  return feedbackByOwner;
 }
 
 /**
@@ -120,6 +115,7 @@ export function specToJSONL(
   db: Database.Database,
   spec: Spec,
   existingExternalLinks?: Map<string, ExternalLink[]>,
+  feedbackByOwner = groupFeedback(db),
 ): SpecJSONL {
   const relationships = getOutgoingRelationships(db, spec.id, "spec");
 
@@ -136,7 +132,7 @@ export function specToJSONL(
   const externalLinks =
     spec.external_links ?? existingExternalLinks?.get(spec.id);
 
-  const feedback = feedbackForEntity(db, spec.id, "spec");
+  const feedback = sortFeedback(feedbackByOwner.get(spec.id) ?? []);
   return {
     ...spec,
     feedback: feedback.length > 0 ? feedback : undefined,
@@ -154,6 +150,7 @@ export function issueToJSONL(
   db: Database.Database,
   issue: Issue,
   existingExternalLinks?: Map<string, ExternalLink[]>,
+  feedbackByOwner = groupFeedback(db),
 ): IssueJSONL {
   const relationships = getOutgoingRelationships(db, issue.id, "issue");
 
@@ -167,7 +164,7 @@ export function issueToJSONL(
 
   const tags = getTags(db, issue.id, "issue");
 
-  const feedbackJSONL = feedbackForEntity(db, issue.id, "issue");
+  const feedbackJSONL = feedbackByOwner.get(issue.id) ?? [];
 
   const externalLinks =
     issue.external_links ?? existingExternalLinks?.get(issue.id);
@@ -191,6 +188,7 @@ export function exportSpecsToJSONL(
   db: Database.Database,
   options: ExportOptions = {},
   existingExternalLinks?: Map<string, ExternalLink[]>,
+  feedbackByOwner = groupFeedback(db),
 ): SpecJSONL[] {
   const { since } = options;
 
@@ -200,7 +198,9 @@ export function exportSpecsToJSONL(
     ? specs.filter((spec) => new Date(spec.updated_at) > since)
     : specs;
 
-  return filtered.map((spec) => specToJSONL(db, spec, existingExternalLinks));
+  return filtered.map((spec) =>
+    specToJSONL(db, spec, existingExternalLinks, feedbackByOwner),
+  );
 }
 
 /**
@@ -211,6 +211,7 @@ export function exportIssuesToJSONL(
   db: Database.Database,
   options: ExportOptions = {},
   existingExternalLinks?: Map<string, ExternalLink[]>,
+  feedbackByOwner = groupFeedback(db),
 ): IssueJSONL[] {
   const { since } = options;
 
@@ -221,7 +222,7 @@ export function exportIssuesToJSONL(
     : issues;
 
   return filtered.map((issue) =>
-    issueToJSONL(db, issue, existingExternalLinks),
+    issueToJSONL(db, issue, existingExternalLinks, feedbackByOwner),
   );
 }
 
@@ -303,6 +304,7 @@ export function exportToJSONL(
   options: ExportOptions = {},
 ): { specsCount: number; issuesCount: number } {
   if (!db.inTransaction) {
+    db.pragma("synchronous = FULL");
     db.exec("BEGIN IMMEDIATE");
     try {
       const counts = exportToJSONL(db, options);
@@ -342,16 +344,19 @@ export function exportToJSONL(
     throw new UnimportedJSONLEntitiesError(unimported);
   }
 
+  const feedbackByOwner = groupFeedback(db);
   const specs = exportSpecsToJSONL(
     db,
     options,
     externalLinksById(existingSpecs.entities),
+    feedbackByOwner,
   );
 
   const issues = exportIssuesToJSONL(
     db,
     options,
     externalLinksById(existingIssues.entities),
+    feedbackByOwner,
   );
   publishJSONL(db, [
     { filePath: path.resolve(specsPath), content: serializeEntities(specs) },

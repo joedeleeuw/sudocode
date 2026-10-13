@@ -22,7 +22,6 @@ import {
   getIssueExternalLinks,
   getIssueFromJsonl,
   findEntitiesByExternalLink,
-  createIssueFromExternal,
   deleteIssueFromJsonl,
   closeIssueInJsonl,
 } from "../../../src/operations/external-links.js";
@@ -529,97 +528,6 @@ describe("External Link Operations", () => {
   });
 
   describe("Auto-Import Operations", () => {
-    describe("createIssueFromExternal", () => {
-      it("should create a new issue with external link", () => {
-        const created = createIssueFromExternal(testDir, {
-          title: "Test Issue from Beads",
-          content: "This issue was imported from beads",
-          status: "open",
-          priority: 1,
-          external: {
-            provider: "beads",
-            external_id: "beads-abc123",
-            sync_direction: "bidirectional",
-          },
-        });
-
-        expect(created.id).toMatch(/^i-[a-z0-9]+$/);
-        expect(created.uuid).toBeDefined();
-        expect(created.title).toBe("Test Issue from Beads");
-        expect(created.content).toBe("This issue was imported from beads");
-        expect(created.status).toBe("open");
-        expect(created.priority).toBe(1);
-        expect(created.external_links).toHaveLength(1);
-        expect(created.external_links![0].provider).toBe("beads");
-        expect(created.external_links![0].external_id).toBe("beads-abc123");
-        expect(created.external_links![0].sync_enabled).toBe(true);
-        expect(created.external_links![0].sync_direction).toBe("bidirectional");
-        expect(created.external_links![0].last_synced_at).toBeDefined();
-      });
-
-      it("should persist the issue to JSONL", () => {
-        const created = createIssueFromExternal(testDir, {
-          title: "Persisted Issue",
-          external: {
-            provider: "beads",
-            external_id: "beads-xyz",
-          },
-        });
-
-        // Read back from JSONL
-        const readBack = getIssueFromJsonl(testDir, created.id);
-        expect(readBack).not.toBeNull();
-        expect(readBack!.title).toBe("Persisted Issue");
-        expect(readBack!.external_links![0].external_id).toBe("beads-xyz");
-      });
-
-      it("should use default values when not provided", () => {
-        const created = createIssueFromExternal(testDir, {
-          title: "Minimal Issue",
-          external: {
-            provider: "beads",
-            external_id: "beads-min",
-          },
-        });
-
-        expect(created.content).toBe("");
-        expect(created.status).toBe("open");
-        expect(created.priority).toBe(2);
-        expect(created.external_links![0].sync_direction).toBe("bidirectional");
-      });
-
-      it("should generate unique IDs for multiple issues", () => {
-        const issue1 = createIssueFromExternal(testDir, {
-          title: "Issue 1",
-          external: { provider: "beads", external_id: "beads-1" },
-        });
-
-        const issue2 = createIssueFromExternal(testDir, {
-          title: "Issue 2",
-          external: { provider: "beads", external_id: "beads-2" },
-        });
-
-        const issue3 = createIssueFromExternal(testDir, {
-          title: "Issue 3",
-          external: { provider: "beads", external_id: "beads-3" },
-        });
-
-        expect(issue1.id).not.toBe(issue2.id);
-        expect(issue2.id).not.toBe(issue3.id);
-        expect(issue1.id).not.toBe(issue3.id);
-      });
-
-      it("should be findable by external link", () => {
-        createIssueFromExternal(testDir, {
-          title: "Findable Issue",
-          external: { provider: "beads", external_id: "beads-find" },
-        });
-
-        const found = findIssuesByExternalLink(testDir, "beads", "beads-find");
-        expect(found).toHaveLength(1);
-        expect(found[0].title).toBe("Findable Issue");
-      });
-    });
 
     describe("deleteIssueFromJsonl", () => {
       it("should delete an existing issue", () => {

@@ -21,22 +21,13 @@ import type {
 } from "@sudocode-ai/types";
 import type { IntegrationProvider } from "./types.js";
 import { resolveByStrategy, logConflict } from "./utils/conflict-resolver.js";
-import { readJSONLSync, writeJSONLSync } from "../jsonl.js";
+import { IntegrationTracker } from "./tracker.js";
 import {
   findSpecsByExternalLink,
   findIssuesByExternalLink,
   getSpecFromJsonl,
   getIssueFromJsonl,
-  updateSpecExternalLinkSync,
-  updateIssueExternalLinkSync,
-  createIssueFromExternal,
-  createSpecFromExternal,
-  deleteIssueFromJsonl,
-  closeIssueInJsonl,
-  removeExternalLinkFromIssue,
-  type ExternalRelationshipInput,
 } from "../operations/external-links.js";
-import * as path from "path";
 
 /**
  * Options for creating a SyncCoordinator
@@ -48,7 +39,7 @@ export interface SyncCoordinatorOptions {
   config: IntegrationsConfig;
   /** Custom conflict resolution callback (for manual resolution) */
   onConflict?: (
-    conflict: SyncConflict
+    conflict: SyncConflict,
   ) => Promise<"sudocode" | "external" | "skip">;
 }
 
@@ -84,11 +75,11 @@ export class SyncCoordinator {
   private providers = new Map<string, IntegrationProvider>();
   private lastSyncTimes = new Map<string, Date>();
 
-  constructor(private options: SyncCoordinatorOptions) {}
+  private tracker: IntegrationTracker;
 
-  // ==========================================================================
-  // Provider Management
-  // ==========================================================================
+  constructor(private options: SyncCoordinatorOptions) {
+    this.tracker = new IntegrationTracker(options.projectPath);
+  }
 
   /**
    * Register an integration provider
@@ -114,10 +105,6 @@ export class SyncCoordinator {
     return Array.from(this.providers.keys());
   }
 
-  // ==========================================================================
-  // Lifecycle
-  // ==========================================================================
-
   /**
    * Start the coordinator and initialize all enabled providers
    *
@@ -140,12 +127,11 @@ export class SyncCoordinator {
         if (!validation.valid) {
           console.warn(
             `[sync-coordinator] Provider ${name} validation failed:`,
-            validation.errors
+            validation.errors,
           );
           continue;
         }
 
-        // Start watching if auto_sync is enabled and provider supports it
         if (
           config.auto_sync &&
           provider.supportsWatch &&
@@ -160,7 +146,7 @@ export class SyncCoordinator {
       } catch (error) {
         console.error(
           `[sync-coordinator] Failed to initialize provider ${name}:`,
-          error
+          error,
         );
       }
     }
@@ -179,10 +165,6 @@ export class SyncCoordinator {
       }
     }
   }
-
-  // ==========================================================================
-  // Sync Operations
-  // ==========================================================================
 
   /**
    * Sync all registered and enabled providers
@@ -272,10 +254,6 @@ export class SyncCoordinator {
     return results;
   }
 
-  // ==========================================================================
-  // Link Management
-  // ==========================================================================
-
   /**
    * Link a sudocode entity to an external entity
    *
@@ -288,7 +266,7 @@ export class SyncCoordinator {
     entityId: string,
     externalId: string,
     provider: string,
-    options?: { sync_direction?: SyncDirection; sync_enabled?: boolean }
+    options?: { sync_direction?: SyncDirection; sync_enabled?: boolean },
   ): Promise<void> {
     const entity = this.loadEntity(entityId);
     if (!entity) {
@@ -305,20 +283,17 @@ export class SyncCoordinator {
 
     const links = entity.external_links || [];
 
-    // Check if link already exists
     const existingIndex = links.findIndex(
-      (l) => l.provider === provider && l.external_id === externalId
+      (l) => l.provider === provider && l.external_id === externalId,
     );
 
     if (existingIndex >= 0) {
-      // Update existing link
       links[existingIndex] = { ...links[existingIndex], ...link };
     } else {
-      // Add new link
       links.push(link);
     }
 
-    this.updateEntityLinks(entityId, links);
+    this.tracker.update(entityId, { external_links: links });
   }
 
   /**
@@ -332,9 +307,9 @@ export class SyncCoordinator {
     if (!entity?.external_links) return;
 
     const links = entity.external_links.filter(
-      (l) => l.external_id !== externalId
+      (l) => l.external_id !== externalId,
     );
-    this.updateEntityLinks(entityId, links);
+    this.tracker.update(entityId, { external_links: links });
   }
 
   /**
@@ -349,7 +324,7 @@ export class SyncCoordinator {
    */
   async handleEntityDeleted(
     entityId: string,
-    externalLinks: ExternalLink[]
+    externalLinks: ExternalLink[],
   ): Promise<SyncResult[]> {
     const results: SyncResult[] = [];
 
@@ -358,7 +333,6 @@ export class SyncCoordinator {
     }
 
     for (const link of externalLinks) {
-      // Skip if sync is disabled or inbound-only
       if (!link.sync_enabled) continue;
       if (link.sync_direction === "inbound") continue;
 
@@ -409,16 +383,12 @@ export class SyncCoordinator {
     return results;
   }
 
-  // ==========================================================================
-  // Internal Methods - Change Handling
-  // ==========================================================================
-
   /**
    * Handle inbound changes from an external provider
    */
   private async handleInboundChanges(
     providerName: string,
-    changes: ExternalChange[]
+    changes: ExternalChange[],
   ): Promise<SyncResult[]> {
     const results: SyncResult[] = [];
     const provider = this.providers.get(providerName);
@@ -431,7 +401,7 @@ export class SyncCoordinator {
         const result = await this.processInboundChange(
           providerName,
           provider,
-          change
+          change,
         );
         results.push(result);
       } catch (error) {
@@ -449,103 +419,35 @@ export class SyncCoordinator {
   }
 
   /**
-   * Convert ExternalEntity relationships to ExternalRelationshipInput format
-   * This maps from the integration's relationship format to the format needed for creating entities
-   */
-  private mapExternalRelationships(
-    externalRelationships:
-      | Array<{
-          targetId: string;
-          targetType: "spec" | "issue";
-          relationshipType: string;
-        }>
-      | undefined
-  ): ExternalRelationshipInput[] | undefined {
-    if (!externalRelationships || externalRelationships.length === 0) {
-      return undefined;
-    }
-
-    return externalRelationships.map((rel) => ({
-      targetExternalId: rel.targetId,
-      targetType: rel.targetType,
-      relationshipType:
-        rel.relationshipType as ExternalRelationshipInput["relationshipType"],
-    }));
-  }
-
-  /**
    * Process a single inbound change
    */
   private async processInboundChange(
     providerName: string,
     provider: IntegrationProvider,
-    change: ExternalChange
+    change: ExternalChange,
   ): Promise<SyncResult> {
     const config = this.getProviderConfig(providerName);
-    const sudocodeDir = path.join(this.options.projectPath, ".sudocode");
 
-    // Find linked sudocode entity
     const linkedEntity = this.findLinkedEntity(providerName, change.entity_id);
 
-    // Handle NEW entities (auto-import) - only for "created" changes
     if (!linkedEntity && change.change_type === "created") {
-      // Auto-import if enabled (defaults to true)
       const autoImport = config?.auto_import !== false;
 
       if (autoImport && change.data) {
-        // Map external entity to sudocode format
         const mapped = provider.mapToSudocode(change.data);
-        const issueData = mapped.issue;
-
-        if (issueData && change.entity_type === "issue") {
-          // Create sudocode issue with auto-link
-          const newIssue = createIssueFromExternal(sudocodeDir, {
-            title: issueData.title || change.data.title,
-            content: issueData.content || change.data.description,
-            status: issueData.status || "open",
-            priority: issueData.priority ?? change.data.priority ?? 2,
-            external: {
-              provider: providerName as IntegrationProviderName,
-              external_id: change.entity_id,
-              sync_direction: config?.default_sync_direction || "bidirectional",
-            },
-            relationships: this.mapExternalRelationships(
-              change.data.relationships
-            ),
-          });
-
-          return {
-            success: true,
-            entity_id: newIssue.id,
-            external_id: change.entity_id,
-            action: "created",
-          };
-        }
-
-        // Handle specs that need to be created
-        const specData = mapped.spec;
-        if (specData && change.entity_type === "spec") {
-          // Create sudocode spec with auto-link and relationships
-          const newSpec = createSpecFromExternal(sudocodeDir, {
-            title: specData.title || change.data.title,
-            content: specData.content || change.data.description,
-            priority: specData.priority ?? change.data.priority ?? 2,
-            external: {
-              provider: providerName as IntegrationProviderName,
-              external_id: change.entity_id,
-              sync_direction: config?.default_sync_direction || "bidirectional",
-            },
-            relationships: this.mapExternalRelationships(
-              change.data.relationships
-            ),
-          });
-          return {
-            success: true,
-            entity_id: newSpec.id,
-            external_id: change.entity_id,
-            action: "created",
-          };
-        }
+        const created = this.tracker.create(change.data, mapped, {
+          provider: providerName,
+          external_id: change.entity_id,
+          sync_enabled: true,
+          sync_direction: config?.default_sync_direction ?? "bidirectional",
+          last_synced_at: new Date().toISOString(),
+        });
+        return {
+          success: true,
+          entity_id: created.id,
+          external_id: change.entity_id,
+          action: "created",
+        };
       }
 
       return {
@@ -556,7 +458,6 @@ export class SyncCoordinator {
       };
     }
 
-    // Handle UPDATED entities without link (skip - they were never imported)
     if (!linkedEntity && change.change_type === "updated") {
       return {
         success: true,
@@ -566,7 +467,6 @@ export class SyncCoordinator {
       };
     }
 
-    // Handle DELETED entities
     if (change.change_type === "deleted") {
       if (!linkedEntity) {
         return {
@@ -577,19 +477,16 @@ export class SyncCoordinator {
         };
       }
 
-      // Get delete behavior from config (defaults to 'close')
       const deleteBehavior = config?.delete_behavior || "close";
 
       if (deleteBehavior === "ignore") {
-        // Disable sync on the stale link to avoid future sync errors
-        updateIssueExternalLinkSync(
-          sudocodeDir,
-          linkedEntity.id,
-          change.entity_id,
-          {
-            sync_enabled: false,
-          }
-        );
+        this.tracker.update(linkedEntity.id, {
+          external_links: linkedEntity.external_links?.map((link) =>
+            link.external_id === change.entity_id
+              ? { ...link, sync_enabled: false }
+              : link,
+          ),
+        });
         return {
           success: true,
           entity_id: linkedEntity.id,
@@ -599,23 +496,23 @@ export class SyncCoordinator {
       }
 
       if (deleteBehavior === "delete") {
-        deleteIssueFromJsonl(sudocodeDir, linkedEntity.id);
+        this.tracker.delete(linkedEntity.id);
         return {
           success: true,
           entity_id: linkedEntity.id,
           external_id: change.entity_id,
-          action: "updated", // Using 'updated' as there's no 'deleted' action type
+          action: "updated",
         };
       }
 
-      // Default: close the issue AND remove the stale external link
-      closeIssueInJsonl(sudocodeDir, linkedEntity.id);
-      // Clean up the external link to avoid orphaned reference
-      removeExternalLinkFromIssue(
-        sudocodeDir,
-        linkedEntity.id,
-        change.entity_id
-      );
+      if (!("status" in linkedEntity))
+        throw new Error(`${linkedEntity.id}.status: only issues can be closed`);
+      this.tracker.update(linkedEntity.id, {
+        status: "closed",
+        external_links: linkedEntity.external_links?.filter(
+          (link) => link.external_id !== change.entity_id,
+        ),
+      });
       return {
         success: true,
         entity_id: linkedEntity.id,
@@ -624,9 +521,8 @@ export class SyncCoordinator {
       };
     }
 
-    // Check for conflicts
     const link = linkedEntity?.external_links?.find(
-      (l) => l.external_id === change.entity_id
+      (l) => l.external_id === change.entity_id,
     );
 
     if (link && change.data?.updated_at && linkedEntity) {
@@ -644,9 +540,8 @@ export class SyncCoordinator {
         }
 
         if (resolution === "sudocode") {
-          // Push sudocode version to external
           await provider.updateEntity(change.entity_id, linkedEntity);
-          this.updateLinkSyncTime(linkedEntity.id, link.external_id);
+          this.tracker.update(linkedEntity.id, {}, link.external_id);
           return {
             success: true,
             entity_id: linkedEntity.id,
@@ -657,16 +552,12 @@ export class SyncCoordinator {
       }
     }
 
-    // Apply inbound change (external wins or no conflict)
     if (change.data && linkedEntity) {
       const mapped = provider.mapToSudocode(change.data);
       const updates = mapped.spec || mapped.issue;
 
       if (updates) {
-        this.applyUpdatesToEntity(linkedEntity.id, updates);
-        if (link) {
-          this.updateLinkSyncTime(linkedEntity.id, link.external_id);
-        }
+        this.tracker.update(linkedEntity.id, updates, link?.external_id);
         return {
           success: true,
           entity_id: linkedEntity.id,
@@ -689,7 +580,7 @@ export class SyncCoordinator {
    */
   private async syncSingleLink(
     entity: Entity,
-    link: ExternalLink
+    link: ExternalLink,
   ): Promise<SyncResult> {
     const provider = this.providers.get(link.provider);
     if (!provider) {
@@ -703,7 +594,6 @@ export class SyncCoordinator {
     }
 
     try {
-      // Fetch current external state
       const externalEntity = await provider.fetchEntity(link.external_id);
       if (!externalEntity) {
         return {
@@ -715,7 +605,6 @@ export class SyncCoordinator {
         };
       }
 
-      // Check for conflicts
       const change: ExternalChange = {
         entity_id: link.external_id,
         entity_type: externalEntity.type,
@@ -739,9 +628,8 @@ export class SyncCoordinator {
         }
 
         if (resolution === "sudocode") {
-          // Push sudocode to external
           await provider.updateEntity(link.external_id, entity);
-          this.updateLinkSyncTime(entity.id, link.external_id);
+          this.tracker.update(entity.id, {}, link.external_id);
           return {
             success: true,
             entity_id: entity.id,
@@ -750,13 +638,9 @@ export class SyncCoordinator {
           };
         }
 
-        // External wins - apply to sudocode
         const mapped = provider.mapToSudocode(externalEntity);
         const updates = mapped.spec || mapped.issue;
-        if (updates) {
-          this.applyUpdatesToEntity(entity.id, updates);
-        }
-        this.updateLinkSyncTime(entity.id, link.external_id);
+        this.tracker.update(entity.id, updates ?? {}, link.external_id);
         return {
           success: true,
           entity_id: entity.id,
@@ -765,7 +649,6 @@ export class SyncCoordinator {
         };
       }
 
-      // No conflict - sync based on direction
       if (
         link.sync_direction === "outbound" ||
         link.sync_direction === "bidirectional"
@@ -773,7 +656,7 @@ export class SyncCoordinator {
         await provider.updateEntity(link.external_id, entity);
       }
 
-      this.updateLinkSyncTime(entity.id, link.external_id);
+      this.tracker.update(entity.id, {}, link.external_id);
       return {
         success: true,
         entity_id: entity.id,
@@ -792,17 +675,13 @@ export class SyncCoordinator {
     }
   }
 
-  // ==========================================================================
-  // Internal Methods - Conflict Detection and Resolution
-  // ==========================================================================
-
   /**
    * Detect if there's a conflict between sudocode and external versions
    */
   private detectConflict(
     entity: Entity,
     change: ExternalChange,
-    link: ExternalLink
+    link: ExternalLink,
   ): SyncConflict | null {
     const sudocodeUpdated = new Date(entity.updated_at);
     const externalUpdated = new Date(change.data?.updated_at || 0);
@@ -810,7 +689,6 @@ export class SyncCoordinator {
       ? new Date(link.last_synced_at)
       : new Date(0);
 
-    // Conflict if both updated since last sync
     if (sudocodeUpdated > lastSynced && externalUpdated > lastSynced) {
       return {
         sudocode_entity_id: entity.id,
@@ -828,7 +706,7 @@ export class SyncCoordinator {
    * Resolve a sync conflict based on configured strategy
    */
   private async resolveConflict(
-    conflict: SyncConflict
+    conflict: SyncConflict,
   ): Promise<"sudocode" | "external" | "skip"> {
     const config = this.getProviderConfig(conflict.provider);
     const strategy = config?.conflict_resolution || "newest-wins";
@@ -854,10 +732,6 @@ export class SyncCoordinator {
     return resolution;
   }
 
-  // ==========================================================================
-  // Internal Methods - Entity Operations
-  // ==========================================================================
-
   /**
    * Get provider config from options
    */
@@ -867,31 +741,8 @@ export class SyncCoordinator {
       | undefined;
   }
 
-  /**
-   * Determine if an ID is for a spec or issue
-   */
-  private getEntityType(id: string): "spec" | "issue" {
-    return id.startsWith("s-") ? "spec" : "issue";
-  }
-
-  /**
-   * Get the JSONL file path for an entity type
-   */
-  private getEntityFilePath(type: "spec" | "issue"): string {
-    const sudocodePath = path.join(this.options.projectPath, ".sudocode");
-    return type === "spec"
-      ? path.join(sudocodePath, "specs.jsonl")
-      : path.join(sudocodePath, "issues.jsonl");
-  }
-
-  /**
-   * Load an entity from JSONL storage
-   */
-  /**
-   * Load an entity from JSONL storage
-   */
   private loadEntity(id: string): Entity | null {
-    const sudocodeDir = path.join(this.options.projectPath, ".sudocode");
+    const sudocodeDir = this.tracker.directory;
     let jsonlEntity: EntityJSONL | null = null;
 
     if (id.startsWith("s-")) {
@@ -908,7 +759,6 @@ export class SyncCoordinator {
    * Convert JSONL entity to domain Entity
    */
   private toEntity(jsonl: EntityJSONL): Entity {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { relationships, tags, feedback, ...entityData } = jsonl as any;
     return entityData as Entity;
   }
@@ -918,95 +768,29 @@ export class SyncCoordinator {
    */
   private findLinkedEntity(
     provider: string,
-    externalId: string
+    externalId: string,
   ): Entity | null {
-    const sudocodeDir = path.join(this.options.projectPath, ".sudocode");
+    const sudocodeDir = this.tracker.directory;
     const providerName = provider as IntegrationProviderName;
 
-    // Search specs
     const specs = findSpecsByExternalLink(
       sudocodeDir,
       providerName,
-      externalId
+      externalId,
     );
     if (specs.length > 0) {
       return this.toEntity(specs[0]);
     }
 
-    // Search issues
     const issues = findIssuesByExternalLink(
       sudocodeDir,
       providerName,
-      externalId
+      externalId,
     );
     if (issues.length > 0) {
       return this.toEntity(issues[0]);
     }
 
     return null;
-  }
-
-  /**
-   * Update external_links on an entity
-   */
-  private updateEntityLinks(id: string, links: ExternalLink[]): void {
-    const type = this.getEntityType(id);
-    const filePath = this.getEntityFilePath(type);
-
-    const entities = readJSONLSync<EntityJSONL>(filePath);
-    const index = entities.findIndex((e) => e.id === id);
-
-    if (index >= 0) {
-      (entities[index] as any).external_links = links;
-      (entities[index] as any).updated_at = new Date().toISOString();
-      writeJSONLSync(filePath, entities);
-    }
-  }
-
-  /**
-   * Update the last_synced_at timestamp on a link
-   */
-  /**
-   * Update the last_synced_at timestamp on a link
-   */
-  private updateLinkSyncTime(entityId: string, externalId: string): void {
-    const sudocodeDir = path.join(this.options.projectPath, ".sudocode");
-    const updates = { last_synced_at: new Date().toISOString() };
-
-    try {
-      if (entityId.startsWith("s-")) {
-        updateSpecExternalLinkSync(sudocodeDir, entityId, externalId, updates);
-      } else {
-        updateIssueExternalLinkSync(sudocodeDir, entityId, externalId, updates);
-      }
-    } catch (error) {
-      // Ignore if entity/link not found (race condition)
-    }
-  }
-
-  /**
-   * Apply partial updates to an entity
-   */
-  private applyUpdatesToEntity(
-    id: string,
-    updates: Partial<Spec | Issue>
-  ): void {
-    const type = this.getEntityType(id);
-    const filePath = this.getEntityFilePath(type);
-
-    const entities = readJSONLSync<EntityJSONL>(filePath);
-    const index = entities.findIndex((e) => e.id === id);
-
-    if (index >= 0) {
-      const current = entities[index];
-      // Apply updates while preserving relationships, tags, etc.
-      const { id: _id, uuid: _uuid, ...safeUpdates } = updates as any;
-      entities[index] = {
-        ...current,
-        ...safeUpdates,
-        updated_at: new Date().toISOString(),
-      };
-      writeJSONLSync(filePath, entities);
-    }
   }
 }

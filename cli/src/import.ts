@@ -37,7 +37,7 @@ import {
   deleteFeedback,
 } from "./operations/feedback.js";
 import { transaction } from "./operations/transactions.js";
-import { specToJSONL, issueToJSONL } from "./export.js";
+import { specToJSONL, issueToJSONL, groupFeedback } from "./export.js";
 import * as path from "path";
 import * as fs from "fs";
 import { getConfig, isMarkdownFirst } from "./config.js";
@@ -705,8 +705,13 @@ export function importFromJSONL(
   const incomingIssues = issuesSnapshot.entities;
   validateReferences(specsSnapshot, issuesSnapshot);
 
-  const existingSpecs = listSpecs(db).map((spec) => specToJSONL(db, spec));
-  const existingIssues = listIssues(db).map((issue) => issueToJSONL(db, issue));
+  const feedbackByOwner = groupFeedback(db);
+  const existingSpecs = listSpecs(db).map((spec) =>
+    specToJSONL(db, spec, undefined, feedbackByOwner),
+  );
+  const existingIssues = listIssues(db).map((issue) =>
+    issueToJSONL(db, issue, undefined, feedbackByOwner),
+  );
 
   const specCollisions = detectCollisions(existingSpecs, incomingSpecs);
   const issueCollisions = detectCollisions(existingIssues, incomingIssues);

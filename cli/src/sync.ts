@@ -25,6 +25,7 @@ import {
 import { getTags, setTags } from "./operations/tags.js";
 import { listFeedback, updateFeedback } from "./operations/feedback.js";
 import { relocateFeedbackAnchor } from "./operations/feedback-anchors.js";
+import { TrackerPublicationError } from "./tracker-publication.js";
 import { persistMutation } from "./tracker-mutation.js";
 import { generateSpecId, generateIssueId } from "./id-generator.js";
 import type { Spec, Issue, IssueStatus } from "@sudocode-ai/types";
@@ -551,7 +552,13 @@ function syncRelationships(
             ? JSON.stringify({ anchor: ref.anchor })
             : undefined,
         });
-      } catch (error) {}
+      } catch (error) {
+        throw new TrackerPublicationError(
+          `${entityType}s.jsonl`,
+          `${entityId}.relationships`,
+          String(error),
+        );
+      }
     }
   }
 
@@ -561,7 +568,11 @@ function syncRelationships(
       const toType = rel.to_type || rel.target_type;
 
       if (!toId || !toType) {
-        continue;
+        throw new TrackerPublicationError(
+          `${entityType}s.jsonl`,
+          `${entityId}.relationships.to_id/to_type`,
+          "missing relationship target",
+        );
       }
 
       const key = `${rel.relationship_type}:${toType}:${toId}`;
@@ -574,7 +585,13 @@ function syncRelationships(
             to_type: toType as "spec" | "issue",
             relationship_type: rel.relationship_type as any,
           });
-        } catch (error) {}
+        } catch (error) {
+          throw new TrackerPublicationError(
+            `${entityType}s.jsonl`,
+            `${entityId}.relationships`,
+            String(error),
+          );
+        }
       }
     }
   }

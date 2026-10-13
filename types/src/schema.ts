@@ -16,7 +16,7 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 -- Optimize for performance
-PRAGMA synchronous=FULL;
+PRAGMA synchronous=NORMAL;
 PRAGMA temp_store=MEMORY;
 PRAGMA mmap_size=30000000000;
 PRAGMA page_size=4096;

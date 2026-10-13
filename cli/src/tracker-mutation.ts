@@ -8,6 +8,7 @@ export function persistMutation<Mutation>(
   directory: string,
   mutate: () => Mutation,
 ) {
+  database.pragma("synchronous = FULL");
   database.exec("BEGIN IMMEDIATE");
   try {
     recoverPublication(database, directory);

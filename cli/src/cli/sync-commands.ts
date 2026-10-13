@@ -6,6 +6,7 @@ import chalk from "chalk";
 import * as fs from "fs";
 import * as path from "path";
 import type Database from "better-sqlite3";
+import { TrackerPublicationError } from "../tracker-publication.js";
 import { exportToJSONL } from "../export.js";
 import { importFromJSONL } from "../import.js";
 import { startWatcher, setupGracefulShutdown } from "../watcher.js";
@@ -235,7 +236,7 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
   console.log();
   console.log(chalk.green(`✓ Synced ${syncedCount} files to database`));
   if (errorCount > 0) {
-    console.log(chalk.yellow(`  ${errorCount} errors`));
+    throw new TrackerPublicationError(ctx.outputDir, "markdown", `${errorCount} files failed to sync; see entity field errors above`);
   }
 }
 
@@ -311,7 +312,7 @@ async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
   console.log();
   console.log(chalk.green(`✓ Synced ${syncedCount} entities to markdown`));
   if (errorCount > 0) {
-    console.log(chalk.yellow(`  ${errorCount} errors`));
+    throw new TrackerPublicationError(ctx.outputDir, "markdown", `${errorCount} files failed to sync; see entity field errors above`);
   }
 }
 

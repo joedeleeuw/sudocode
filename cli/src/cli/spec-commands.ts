@@ -19,7 +19,7 @@ import {
 } from "../operations/relationships.js";
 import { getTags, setTags } from "../operations/tags.js";
 import { listFeedback } from "../operations/feedback.js";
-import { exportToJSONL } from "../export.js";
+import { persistMutation } from "../tracker-mutation.js";
 import { writeMarkdownFile } from "../markdown.js";
 import { generateUniqueFilename } from "../filename-generator.js";
 import { trackCommand } from "../telemetry.js";
@@ -41,45 +41,43 @@ export interface SpecCreateOptions {
 export async function handleSpecCreate(
   ctx: CommandContext,
   title: string,
-  options: SpecCreateOptions
+  options: SpecCreateOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Generate spec ID and UUID
     const { id: specId, uuid: specUUID } = generateSpecId(
       ctx.db,
-      ctx.outputDir
+      ctx.outputDir,
     );
 
-    // Ensure specs directory exists
     const specsDir = path.join(ctx.outputDir, "specs");
     fs.mkdirSync(specsDir, { recursive: true });
 
-    // Generate title-based filename
     const fileName = options.filePath
       ? path.basename(options.filePath)
       : generateUniqueFilename(title, specId);
     const filePath = `specs/${fileName}`;
 
-    // Create spec in database
     const content = options.description || "";
-    const spec = createSpec(ctx.db, {
-      id: specId,
-      uuid: specUUID,
-      title,
-      file_path: filePath,
-      content,
-      priority: parseInt(options.priority),
-      parent_id: options.parent || undefined,
+    const spec = persistMutation(ctx.db, ctx.outputDir, () => {
+      const spec = createSpec(ctx.db, {
+        id: specId,
+        uuid: specUUID,
+        title,
+        file_path: filePath,
+        content,
+        priority: parseInt(options.priority),
+        parent_id: options.parent || undefined,
+      });
+
+      if (options.tags) {
+        const tags = options.tags.split(",").map((t) => t.trim());
+        setTags(ctx.db, specId, "spec", tags);
+      }
+
+      return spec;
     });
 
-    // Add tags if provided
-    if (options.tags) {
-      const tags = options.tags.split(",").map((t) => t.trim());
-      setTags(ctx.db, specId, "spec", tags);
-    }
-
-    // Create markdown file
     const frontmatter = {
       id: specId,
       title,
@@ -93,22 +91,30 @@ export async function handleSpecCreate(
 
     writeMarkdownFile(path.join(ctx.outputDir, filePath), frontmatter, content);
 
-    // Export to JSONL
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Output result
     if (ctx.jsonOutput) {
       console.log(
-        JSON.stringify({ id: specId, title, file_path: filePath }, null, 2)
+        JSON.stringify({ id: specId, title, file_path: filePath }, null, 2),
       );
     } else {
       console.log(chalk.green("✓ Created spec"), chalk.cyan(specId));
       console.log(chalk.gray(`  Title: ${title}`));
       console.log(chalk.gray(`  File: ${filePath}`));
     }
-    await trackCommand(ctx.outputDir, "spec_create", { title }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_create",
+      { title },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "spec_create", { title }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_create",
+      { title },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to create spec"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -124,18 +130,17 @@ export interface SpecListOptions {
 
 export async function handleSpecList(
   ctx: CommandContext,
-  options: SpecListOptions
+  options: SpecListOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Use search if grep is provided, otherwise use list with filters
     const specs = options.grep
       ? searchSpecs(ctx.db, options.grep, {
           priority: options.priority ? parseInt(options.priority) : undefined,
           archived:
             options.archived !== undefined
               ? options.archived === "true"
-              : false, // Default to excluding archived
+              : false,
           limit: parseInt(options.limit),
         })
       : listSpecs(ctx.db, {
@@ -143,7 +148,7 @@ export async function handleSpecList(
           archived:
             options.archived !== undefined
               ? options.archived === "true"
-              : false, // Default to excluding archived
+              : false,
           limit: parseInt(options.limit),
         });
 
@@ -160,14 +165,26 @@ export async function handleSpecList(
       for (const spec of specs) {
         console.log(chalk.cyan(spec.id), spec.title);
         console.log(
-          chalk.gray(`  Priority: ${spec.priority} | ${spec.file_path}`)
+          chalk.gray(`  Priority: ${spec.priority} | ${spec.file_path}`),
         );
       }
       console.log();
     }
-    await trackCommand(ctx.outputDir, "spec_list", {}, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_list",
+      {},
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "spec_list", {}, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_list",
+      {},
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to list specs"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -176,7 +193,7 @@ export async function handleSpecList(
 
 export async function handleSpecShow(
   ctx: CommandContext,
-  id: string
+  id: string,
 ): Promise<void> {
   const startTime = Date.now();
   try {
@@ -196,8 +213,8 @@ export async function handleSpecShow(
         JSON.stringify(
           { ...spec, relationships: { outgoing, incoming }, tags, feedback },
           null,
-          2
-        )
+          2,
+        ),
       );
     } else {
       console.log();
@@ -227,8 +244,8 @@ export async function handleSpecShow(
         for (const rel of outgoing) {
           console.log(
             `  ${chalk.yellow(rel.relationship_type)} → ${chalk.cyan(
-              rel.to_id
-            )} (${rel.to_type})`
+              rel.to_id,
+            )} (${rel.to_type})`,
           );
         }
       }
@@ -239,8 +256,8 @@ export async function handleSpecShow(
         for (const rel of incoming) {
           console.log(
             `  ${chalk.cyan(rel.from_id)} (${rel.from_type}) → ${chalk.yellow(
-              rel.relationship_type
-            )}`
+              rel.relationship_type,
+            )}`,
           );
         }
       }
@@ -262,14 +279,14 @@ export async function handleSpecShow(
           console.log(
             `  ${chalk.cyan(fb.id)} ← ${chalk.cyan(fb.from_id)}`,
             statusColor(`[${fb.dismissed ? "dismissed" : "active"}]`),
-            anchorStatusColor(`[${anchor.anchor_status}]`)
+            anchorStatusColor(`[${anchor.anchor_status}]`),
           );
           console.log(
             chalk.gray(
               `    Type: ${fb.feedback_type} | ${
                 anchor.section_heading || "No section"
-              } (line ${anchor.line_number})`
-            )
+              } (line ${anchor.line_number})`,
+            ),
           );
           const contentPreview =
             fb.content.substring(0, 60) + (fb.content.length > 60 ? "..." : "");
@@ -279,9 +296,21 @@ export async function handleSpecShow(
 
       console.log();
     }
-    await trackCommand(ctx.outputDir, "spec_show", { id }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_show",
+      { id },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "spec_show", { id }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_show",
+      { id },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to show spec"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -300,7 +329,7 @@ export interface SpecUpdateOptions {
 export async function handleSpecUpdate(
   ctx: CommandContext,
   id: string,
-  options: SpecUpdateOptions
+  options: SpecUpdateOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
@@ -310,7 +339,6 @@ export async function handleSpecUpdate(
       process.exit(1);
     }
 
-    // Prepare update
     const { updateSpec } = await import("../operations/specs.js");
     const updateData: any = {};
 
@@ -330,16 +358,17 @@ export async function handleSpecUpdate(
       updateData.archived = options.archived === "true";
     }
 
-    // Update spec in database
-    const updated = updateSpec(ctx.db, id, updateData);
+    const updated = persistMutation(ctx.db, ctx.outputDir, () => {
+      const updated = updateSpec(ctx.db, id, updateData);
 
-    // Update tags if provided
-    if (options.tags !== undefined) {
-      const tags = options.tags.split(",").map((t) => t.trim());
-      setTags(ctx.db, id, "spec", tags);
-    }
+      if (options.tags !== undefined) {
+        const tags = options.tags.split(",").map((t) => t.trim());
+        setTags(ctx.db, id, "spec", tags);
+      }
 
-    // Update markdown file if description or title changed
+      return updated;
+    });
+
     if (
       options.description !== undefined ||
       options.title ||
@@ -349,21 +378,17 @@ export async function handleSpecUpdate(
     ) {
       const fullPath = path.join(ctx.outputDir, spec.file_path);
 
-      // Read existing file to preserve content
       let existingContent = "";
       if (fs.existsSync(fullPath)) {
         existingContent = fs.readFileSync(fullPath, "utf8");
-        // Extract the content after frontmatter
         const match = existingContent.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
         if (match) {
           existingContent = match[1];
         }
       }
 
-      // Get current tags
       const currentTags = getTags(ctx.db, id, "spec");
 
-      // Build frontmatter with updated values
       const frontmatter = {
         id: updated.id,
         title: updated.title,
@@ -380,10 +405,6 @@ export async function handleSpecUpdate(
       writeMarkdownFile(fullPath, frontmatter, markdownContent);
     }
 
-    // Export to JSONL
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Output result
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(updated, null, 2));
     } else {
@@ -392,9 +413,21 @@ export async function handleSpecUpdate(
       if (options.priority)
         console.log(chalk.gray(`  Priority: ${updated.priority}`));
     }
-    await trackCommand(ctx.outputDir, "spec_update", { id }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_update",
+      { id },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "spec_update", { id }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "spec_update",
+      { id },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to update spec"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -406,7 +439,7 @@ export interface SpecDeleteOptions {}
 export async function handleSpecDelete(
   ctx: CommandContext,
   ids: string[],
-  options: SpecDeleteOptions
+  options: SpecDeleteOptions,
 ): Promise<void> {
   try {
     const results = [];
@@ -422,14 +455,13 @@ export async function handleSpecDelete(
           continue;
         }
 
-        // Get the markdown file path before deletion
         const markdownPath = path.join(ctx.outputDir, spec.file_path);
 
-        // Delete spec from database
         const { deleteSpec } = await import("../operations/specs.js");
-        const deleted = deleteSpec(ctx.db, id);
+        const deleted = persistMutation(ctx.db, ctx.outputDir, () =>
+          deleteSpec(ctx.db, id),
+        );
         if (deleted) {
-          // Remove markdown file
           if (fs.existsSync(markdownPath)) {
             fs.unlinkSync(markdownPath);
           }
@@ -451,14 +483,11 @@ export async function handleSpecDelete(
             chalk.red("✗ Failed to process"),
             chalk.cyan(id),
             ":",
-            message
+            message,
           );
         }
       }
     }
-
-    // Export to JSONL after all deletions
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(results, null, 2));

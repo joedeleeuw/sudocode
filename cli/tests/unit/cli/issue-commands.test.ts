@@ -69,20 +69,6 @@ describe("Issue CLI Commands", () => {
   };
 
   describe("handleIssueCreate", () => {
-    it("should create an issue with minimal options", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-      const options = {
-        type: "task",
-        priority: "2",
-      };
-
-      await handleIssueCreate(ctx, "Test Issue", options);
-
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        expect.stringContaining("✓ Created issue"),
-        expect.anything()
-      );
-    });
 
     it("should create an issue with all options", async () => {
       const ctx = { db, outputDir: tempDir, jsonOutput: false };

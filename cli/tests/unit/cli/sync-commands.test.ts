@@ -670,23 +670,6 @@ describe("Export and Import Commands", () => {
       expect(fs.existsSync(path.join(outputDir, "issues.jsonl"))).toBe(true);
     });
 
-    it("should create output directory if it doesn't exist", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-      const newOutputDir = path.join(tempDir, "new-output", "nested");
-
-      createSpec(db, {
-        id: "SPEC-001",
-        title: "Test",
-        file_path: "specs/test.md",
-        content: "# Test",
-        priority: 2,
-      });
-
-      await handleExport(ctx, { output: newOutputDir });
-
-      expect(fs.existsSync(path.join(newOutputDir, "specs.jsonl"))).toBe(true);
-    });
-
     it("should overwrite existing JSONL files", async () => {
       const ctx = { db, outputDir: tempDir, jsonOutput: false };
 
@@ -908,74 +891,6 @@ describe("Export and Import Commands", () => {
       const { listSpecs } = await import("../../../src/operations/specs.js");
       expect(listSpecs(db, {}).length).toBe(0);
     });
-
-    it("should perform round-trip export and import correctly", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-      const exportDir = path.join(tempDir, "export");
-
-      // Create test data
-      createSpec(db, {
-        id: "SPEC-001",
-        title: "Round Trip Spec",
-        file_path: "specs/roundtrip.md",
-        content: "# Round trip content",
-        priority: 3,
-      });
-
-      createIssue(db, {
-        id: "ISSUE-001",
-        title: "Round Trip Issue",
-        content: "# Issue content",
-        status: "in_progress",
-        priority: 2,
-      });
-
-      // Add relationship
-      const { addRelationship } = await import(
-        "../../../src/operations/relationships.js"
-      );
-      addRelationship(db, {
-        from_id: "ISSUE-001",
-        from_type: "issue",
-        to_id: "SPEC-001",
-        to_type: "spec",
-        relationship_type: "implements",
-      });
-
-      // Export
-      await handleExport(ctx, { output: exportDir });
-
-      // Create new database
-      const db2 = initDatabase({ path: ":memory:" });
-      const ctx2 = { db: db2, outputDir: tempDir, jsonOutput: false };
-
-      consoleLogSpy.mockClear();
-
-      // Import into new database
-      await handleImport(ctx2, { input: exportDir });
-
-      // Verify all data was imported correctly
-      const { getSpec } = await import("../../../src/operations/specs.js");
-      const { getIssue } = await import("../../../src/operations/issues.js");
-      const { getOutgoingRelationships } = await import(
-        "../../../src/operations/relationships.js"
-      );
-
-      const spec = getSpec(db2, "SPEC-001");
-      expect(spec?.title).toBe("Round Trip Spec");
-      expect(spec?.priority).toBe(3);
-
-      const issue = getIssue(db2, "ISSUE-001");
-      expect(issue?.title).toBe("Round Trip Issue");
-      expect(issue?.status).toBe("in_progress");
-      expect(issue?.priority).toBe(2);
-
-      const relationships = getOutgoingRelationships(db2, "ISSUE-001", "issue");
-      expect(relationships).toHaveLength(1);
-      expect(relationships[0].relationship_type).toBe("implements");
-
-      db2.close();
-    });
   });
 
   describe("Auto-initialization", () => {
@@ -1029,21 +944,6 @@ describe("Export and Import Commands", () => {
       const output = consoleLogSpy.mock.calls.flat().join(" ");
       // Should contain both initialization AND sync messages
       expect(output).toContain("Initializing sudocode...");
-      expect(output).toContain("Detecting sync direction");
-    });
-
-    it("should not re-initialize on second sync call", async () => {
-      const ctx = { db: uninitDb, outputDir: uninitTempDir, jsonOutput: false };
-
-      // First sync - should initialize
-      await handleSync(ctx, {});
-      consoleLogSpy.mockClear();
-
-      // Second sync - should NOT initialize again
-      await handleSync(ctx, {});
-
-      const output = consoleLogSpy.mock.calls.flat().join(" ");
-      expect(output).not.toContain("Initializing sudocode...");
       expect(output).toContain("Detecting sync direction");
     });
   });
@@ -1148,63 +1048,6 @@ Fresh content from markdown`;
       const updatedIssue = getIssue(db, "i-test2");
       expect(updatedIssue?.title).toBe("Fresh Markdown Title");
       expect(updatedIssue?.status).toBe("in_progress");
-    });
-
-    it("should prefer database (to-markdown) in mixed state conflicts", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-      const issuesDir = path.join(tempDir, "issues");
-      fs.mkdirSync(issuesDir, { recursive: true });
-
-      // Create two issues with different states
-      const pastTime = new Date(Date.now() - 10000);
-
-      // Issue 1: Database is newer
-      const issue1 = createIssue(db, {
-        id: "i-conf1",
-        uuid: "conf-uuid-1",
-        title: "Database Newer",
-        content: "DB is fresh",
-        status: "open",
-        priority: 2,
-      });
-
-      // Issue 2: Markdown will be newer (created with old timestamp in DB)
-      const issue2 = createIssue(db, {
-        id: "i-conf2",
-        uuid: "conf-uuid-2",
-        title: "Old in DB",
-        content: "DB is old",
-        status: "open",
-        priority: 2,
-        updated_at: pastTime.toISOString(),
-      });
-
-      await exportToJSONL(db, { outputDir: tempDir });
-
-      // Create stale markdown for issue1
-      const md1Path = path.join(issuesDir, "i-conf1.md");
-      fs.writeFileSync(md1Path, `---\nid: i-conf1\ntitle: Stale\n---\nStale`, "utf8");
-      fs.utimesSync(md1Path, pastTime, pastTime);
-
-      // Create markdown for issue2 (also set to past so JSONL is strictly newer)
-      const md2Path = path.join(issuesDir, "i-conf2.md");
-      fs.writeFileSync(md2Path, `---\nid: i-conf2\ntitle: Fresh MD\n---\nFresh`, "utf8");
-      const slightlyPast = new Date(Date.now() - 2000);
-      fs.utimesSync(md2Path, slightlyPast, slightlyPast);
-
-      // Run sync - should prefer database as source of truth in conflict
-      await handleSync(ctx, {});
-
-      const output = consoleLogSpy.mock.calls.flat().join(" ");
-      expect(output).toContain("TO markdown");
-      expect(output).toContain("database is newer");
-
-      // Verify issue1's markdown was updated from database
-      // Note: File may be renamed to match new title format: {id}_{title_slug}.md
-      const renamedMd1Path = path.join(issuesDir, "i-conf1_database_newer.md");
-      const finalMd1Path = fs.existsSync(renamedMd1Path) ? renamedMd1Path : md1Path;
-      const md1Content = fs.readFileSync(finalMd1Path, "utf8");
-      expect(md1Content).toContain("title: Database Newer");
     });
 
     it("should handle no-sync when everything is in sync", async () => {

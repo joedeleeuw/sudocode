@@ -1,3 +1,4 @@
+import { persistMutation } from "@sudocode-ai/cli/dist/tracker-mutation.js";
 /**
  * Feedback API routes (mapped to /api/feedback)
  *
@@ -14,7 +15,7 @@ import {
   getAllFeedback,
 } from "../services/feedback.js";
 import { broadcastFeedbackUpdate } from "../services/websocket.js";
-import { persistMutation } from "../services/export.js";
+
 
 export function createFeedbackRouter(): Router {
   const router = Router();
@@ -28,7 +29,6 @@ export function createFeedbackRouter(): Router {
     try {
       const options: any = {};
 
-      // Support both new and legacy parameter names
       if (req.query.to_id || req.query.spec_id) {
         options.to_id = (req.query.to_id || req.query.spec_id) as string;
       }
@@ -107,8 +107,8 @@ export function createFeedbackRouter(): Router {
       const {
         from_id,
         to_id,
-        issue_id,  // legacy
-        spec_id,   // legacy
+        issue_id,
+        spec_id,
         feedback_type,
         content,
         agent,
@@ -116,11 +116,9 @@ export function createFeedbackRouter(): Router {
         dismissed,
       } = req.body;
 
-      // Support both new and legacy field names
       const fromId = from_id || issue_id;
       const toId = to_id || spec_id;
 
-      // Validate from_id if provided (must be string if not null/undefined)
       if (fromId !== undefined && fromId !== null && typeof fromId !== "string") {
         res.status(400).json({
           success: false,
@@ -148,7 +146,6 @@ export function createFeedbackRouter(): Router {
         return;
       }
 
-      // Validate feedback_type
       const validTypes = ["comment", "suggestion", "request"];
       if (!validTypes.includes(feedback_type)) {
         res.status(400).json({
@@ -168,7 +165,6 @@ export function createFeedbackRouter(): Router {
         return;
       }
 
-      // Validate anchor if provided
       if (anchor !== undefined && anchor !== null) {
         if (typeof anchor !== "object") {
           res.status(400).json({
@@ -179,7 +175,6 @@ export function createFeedbackRouter(): Router {
           return;
         }
 
-        // Validate anchor structure if provided
         if (anchor.anchor_status) {
           const validAnchorStatuses = ["valid", "relocated", "stale"];
           if (!validAnchorStatuses.includes(anchor.anchor_status)) {
@@ -193,14 +188,12 @@ export function createFeedbackRouter(): Router {
         }
       }
 
-      // Create feedback and persist it to the tracked JSONL atomically: the
-      // request fails (and nothing stays in the database) when the export does
       const feedback = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
         () =>
           createNewFeedback(req.project!.db, {
-            from_id: fromId || undefined,  // Can be undefined for anonymous feedback
+            from_id: fromId || undefined,
             to_id: toId,
             feedback_type: feedback_type as FeedbackType,
             content,
@@ -210,7 +203,6 @@ export function createFeedbackRouter(): Router {
           })
       );
 
-      // Broadcast feedback creation to WebSocket clients
       broadcastFeedbackUpdate(req.project!.id, "created", feedback);
 
       res.status(201).json({
@@ -220,7 +212,6 @@ export function createFeedbackRouter(): Router {
     } catch (error) {
       console.error("Error creating feedback:", error);
 
-      // Handle specific errors
       if (error instanceof Error) {
         if (error.message.includes("not found")) {
           res.status(404).json({
@@ -258,7 +249,6 @@ export function createFeedbackRouter(): Router {
       const { id } = req.params;
       const { content, dismissed, anchor } = req.body;
 
-      // Validate that at least one field is provided
       if (
         content === undefined &&
         dismissed === undefined &&
@@ -272,7 +262,6 @@ export function createFeedbackRouter(): Router {
         return;
       }
 
-      // Validate anchor if provided
       if (anchor !== undefined) {
         if (typeof anchor !== "object") {
           res.status(400).json({
@@ -303,20 +292,17 @@ export function createFeedbackRouter(): Router {
         }
       }
 
-      // Build update input
       const updateInput: any = {};
       if (content !== undefined) updateInput.content = content;
       if (dismissed !== undefined) updateInput.dismissed = dismissed;
       if (anchor !== undefined) updateInput.anchor = anchor as FeedbackAnchor;
 
-      // Update feedback and persist it to the tracked JSONL atomically
       const feedback = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
         () => updateExistingFeedback(req.project!.db, id, updateInput)
       );
 
-      // Broadcast feedback update to WebSocket clients
       broadcastFeedbackUpdate(req.project!.id, "updated", feedback);
 
       res.json({
@@ -326,7 +312,6 @@ export function createFeedbackRouter(): Router {
     } catch (error) {
       console.error("Error updating feedback:", error);
 
-      // Handle "not found" errors
       if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({
           success: false,
@@ -352,7 +337,6 @@ export function createFeedbackRouter(): Router {
     try {
       const { id } = req.params;
 
-      // Check if feedback exists first
       const existingFeedback = getFeedbackById(req.project!.db, id);
       if (!existingFeedback) {
         res.status(404).json({
@@ -363,7 +347,6 @@ export function createFeedbackRouter(): Router {
         return;
       }
 
-      // Delete feedback and persist the deletion to the tracked JSONL atomically
       const deleted = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -371,7 +354,6 @@ export function createFeedbackRouter(): Router {
       );
 
       if (deleted) {
-        // Broadcast feedback deletion to WebSocket clients
         broadcastFeedbackUpdate(req.project!.id, "deleted", { id });
 
         res.json({

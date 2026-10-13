@@ -1,3 +1,9 @@
+import { persistMutation } from "@sudocode-ai/cli/dist/tracker-mutation.js";
+import { getSpec, updateSpec } from "@sudocode-ai/cli/dist/operations/specs.js";
+import {
+  getIssue,
+  updateIssue,
+} from "@sudocode-ai/cli/dist/operations/issues.js";
 /**
  * Refresh Service - handles refreshing entities from external sources
  *
@@ -23,12 +29,8 @@ import {
 } from "@sudocode-ai/cli/dist/integrations/index.js";
 import { updateExistingSpec } from "./specs.js";
 import { updateExistingIssue } from "./issues.js";
-import { readJSONLSync, writeJSONLSync } from "@sudocode-ai/cli/dist/jsonl.js";
+import { readJSONLSync } from "@sudocode-ai/cli/dist/jsonl.js";
 import * as path from "path";
-
-// =============================================================================
-// Types
-// =============================================================================
 
 /**
  * Change between local and remote values for a field
@@ -76,10 +78,6 @@ export interface BulkRefreshResult {
   results: BulkRefreshEntityResult[];
 }
 
-// =============================================================================
-// Content Hash Utilities
-// =============================================================================
-
 /**
  * Compute SHA256 hash of content for change detection
  * Matches the implementation in import.ts
@@ -102,10 +100,9 @@ export function computeContentHash(title: string, content: string): string {
 export function detectLocalChanges(
   title: string,
   content: string,
-  storedHash: string | undefined
+  storedHash: string | undefined,
 ): boolean {
   if (!storedHash) {
-    // No stored hash means we can't detect changes - assume no local changes
     return false;
   }
   const currentHash = computeContentHash(title, content);
@@ -119,7 +116,7 @@ export function computeFieldChanges(
   localTitle: string,
   localContent: string,
   remoteTitle: string,
-  remoteContent: string
+  remoteContent: string,
 ): FieldChange[] {
   const changes: FieldChange[] = [];
 
@@ -142,90 +139,43 @@ export function computeFieldChanges(
   return changes;
 }
 
-// =============================================================================
-// External Link Update Utilities
-// =============================================================================
-
-/**
- * Update an external link on a spec in JSONL
- */
-function updateSpecExternalLink(
-  sudocodeDir: string,
-  specId: string,
+function updateExternalLink(
+  database: Database.Database,
+  entityType: "spec" | "issue",
+  entityId: string,
   externalId: string,
-  updates: Partial<ExternalLink>
-): void {
-  const specsPath = path.join(sudocodeDir, "specs.jsonl");
-  const specs = readJSONLSync<any>(specsPath, { skipErrors: true });
-
-  const specIndex = specs.findIndex((s: any) => s.id === specId);
-  if (specIndex === -1) {
-    throw new Error(`Spec not found: ${specId}`);
+  updates: Partial<ExternalLink>,
+) {
+  const operations = {
+    spec: { get: getSpec, update: updateSpec },
+    issue: { get: getIssue, update: updateIssue },
+  };
+  const entity = operations[entityType].get(database, entityId);
+  if (!entity) throw new Error(`${entityType}.${entityId}: entity missing`);
+  const links = entity.external_links;
+  if (!links?.some((link) => link.external_id === externalId)) {
+    throw new Error(
+      `${entityId}.external_links.external_id: missing ${externalId}`,
+    );
   }
-
-  const spec = specs[specIndex];
-  const links = spec.external_links || [];
-  const linkIndex = links.findIndex((l: any) => l.external_id === externalId);
-
-  if (linkIndex === -1) {
-    throw new Error(`External link not found: ${externalId}`);
-  }
-
-  links[linkIndex] = { ...links[linkIndex], ...updates };
-  spec.external_links = links;
-  spec.updated_at = new Date().toISOString();
-  specs[specIndex] = spec;
-
-  writeJSONLSync(specsPath, specs);
+  operations[entityType].update(database, entityId, {
+    external_links: JSON.stringify(
+      links.map((link) =>
+        link.external_id === externalId ? { ...link, ...updates } : link,
+      ),
+    ),
+  });
 }
-
-/**
- * Update an external link on an issue in JSONL
- */
-function updateIssueExternalLink(
-  sudocodeDir: string,
-  issueId: string,
-  externalId: string,
-  updates: Partial<ExternalLink>
-): void {
-  const issuesPath = path.join(sudocodeDir, "issues.jsonl");
-  const issues = readJSONLSync<any>(issuesPath, { skipErrors: true });
-
-  const issueIndex = issues.findIndex((i: any) => i.id === issueId);
-  if (issueIndex === -1) {
-    throw new Error(`Issue not found: ${issueId}`);
-  }
-
-  const issue = issues[issueIndex];
-  const links = issue.external_links || [];
-  const linkIndex = links.findIndex((l: any) => l.external_id === externalId);
-
-  if (linkIndex === -1) {
-    throw new Error(`External link not found: ${externalId}`);
-  }
-
-  links[linkIndex] = { ...links[linkIndex], ...updates };
-  issue.external_links = links;
-  issue.updated_at = new Date().toISOString();
-  issues[issueIndex] = issue;
-
-  writeJSONLSync(issuesPath, issues);
-}
-
-// =============================================================================
-// Refresh Logic
-// =============================================================================
 
 /**
  * Get a provider instance for the given provider name
  */
 async function getProvider(
   providerName: string,
-  projectPath: string
+  projectPath: string,
 ): Promise<IntegrationProvider | null> {
   const firstPartyPlugins = getFirstPartyPlugins();
 
-  // Try first-party plugins
   for (const p of firstPartyPlugins) {
     if (p.name === providerName) {
       const plugin = await loadPlugin(p.name);
@@ -235,7 +185,6 @@ async function getProvider(
     }
   }
 
-  // Try loading as custom plugin
   const plugin = await loadPlugin(providerName);
   if (plugin) {
     return plugin.createProvider({}, projectPath);
@@ -259,9 +208,8 @@ export async function refreshSpec(
   sudocodeDir: string,
   projectPath: string,
   specId: string,
-  force: boolean = false
+  force: boolean = false,
 ): Promise<RefreshResult> {
-  // Get spec from JSONL (includes external_links)
   const spec = getSpecFromJsonl(sudocodeDir, specId);
   if (!spec) {
     return {
@@ -271,7 +219,6 @@ export async function refreshSpec(
     };
   }
 
-  // Check for external links
   const externalLinks = spec.external_links || [];
   if (externalLinks.length === 0) {
     return {
@@ -281,11 +228,10 @@ export async function refreshSpec(
     };
   }
 
-  // Use the first sync-enabled inbound link
   const link = externalLinks.find(
     (l) =>
       l.sync_enabled &&
-      (l.sync_direction === "inbound" || l.sync_direction === "bidirectional")
+      (l.sync_direction === "inbound" || l.sync_direction === "bidirectional"),
   );
 
   if (!link) {
@@ -296,7 +242,6 @@ export async function refreshSpec(
     };
   }
 
-  // Get provider
   const provider = await getProvider(link.provider, projectPath);
   if (!provider) {
     return {
@@ -309,105 +254,74 @@ export async function refreshSpec(
   try {
     await provider.initialize();
 
-    // Fetch fresh entity from provider
     const remoteEntity = await provider.fetchEntity(link.external_id);
 
-    // Handle stale/deleted entity
-    if (!remoteEntity) {
-      // Mark link as stale but don't delete local entity
-      updateSpecExternalLink(sudocodeDir, specId, link.external_id, {
-        sync_enabled: false,
-        metadata: {
-          ...link.metadata,
+    return persistMutation(db, sudocodeDir, () => {
+      if (!remoteEntity) {
+        updateExternalLink(db, "spec", specId, link.external_id, {
+          sync_enabled: false,
+          metadata: {
+            ...link.metadata,
+            stale: true,
+            stale_reason: "external_entity_not_found",
+            stale_at: new Date().toISOString(),
+          },
+        });
+
+        return {
+          updated: false,
+          hasLocalChanges: false,
           stale: true,
-          stale_reason: "external_entity_not_found",
-          stale_at: new Date().toISOString(),
-        },
-      });
+          error: "External entity no longer exists",
+        };
+      }
 
-      return {
-        updated: false,
-        hasLocalChanges: false,
-        stale: true,
-        error: "External entity no longer exists",
-      };
-    }
-
-    // Check for local changes
-    const hasLocalChanges = detectLocalChanges(
-      spec.title,
-      spec.content || "",
-      link.content_hash
-    );
-
-    // If local changes exist and not forcing, return preview
-    if (hasLocalChanges && !force) {
-      const changes = computeFieldChanges(
+      const hasLocalChanges = detectLocalChanges(
         spec.title,
         spec.content || "",
-        remoteEntity.title,
-        remoteEntity.description || ""
+        link.content_hash,
       );
 
-      return {
-        updated: false,
-        hasLocalChanges: true,
-        changes,
-      };
-    }
+      if (hasLocalChanges && !force) {
+        const changes = computeFieldChanges(
+          spec.title,
+          spec.content || "",
+          remoteEntity.title,
+          remoteEntity.description || "",
+        );
 
-    // Update spec with remote data
-    const newContentHash = computeContentHash(
-      remoteEntity.title,
-      remoteEntity.description || ""
-    );
-    const now = new Date().toISOString();
+        return {
+          updated: false,
+          hasLocalChanges: true,
+          changes,
+        };
+      }
 
-    // Update in database
-    const updatedSpec = updateExistingSpec(db, specId, {
-      title: remoteEntity.title,
-      content: remoteEntity.description || "",
-    });
+      const newContentHash = computeContentHash(
+        remoteEntity.title,
+        remoteEntity.description || "",
+      );
+      const now = new Date().toISOString();
 
-    // Update external link metadata in JSONL
-    updateSpecExternalLink(sudocodeDir, specId, link.external_id, {
-      content_hash: newContentHash,
-      last_synced_at: now,
-      external_updated_at: remoteEntity.updated_at,
-    });
+      const updatedSpec = updateExistingSpec(db, specId, {
+        title: remoteEntity.title,
+        content: remoteEntity.description || "",
+      });
 
-    return {
-      updated: true,
-      hasLocalChanges: false,
-      entity: updatedSpec,
-    };
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
-
-    // Check for 404-like errors indicating stale entity
-    if (
-      errorMessage.includes("404") ||
-      errorMessage.includes("not found") ||
-      errorMessage.includes("Not Found")
-    ) {
-      updateSpecExternalLink(sudocodeDir, specId, link.external_id, {
-        sync_enabled: false,
-        metadata: {
-          ...link.metadata,
-          stale: true,
-          stale_reason: "fetch_failed_404",
-          stale_at: new Date().toISOString(),
-        },
+      updateExternalLink(db, "spec", specId, link.external_id, {
+        content_hash: newContentHash,
+        last_synced_at: now,
+        external_updated_at: remoteEntity.updated_at,
       });
 
       return {
-        updated: false,
+        updated: true,
         hasLocalChanges: false,
-        stale: true,
-        error: "External entity no longer exists",
+        entity: updatedSpec,
       };
-    }
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
 
     return {
       updated: false,
@@ -434,9 +348,8 @@ export async function refreshIssue(
   sudocodeDir: string,
   projectPath: string,
   issueId: string,
-  force: boolean = false
+  force: boolean = false,
 ): Promise<RefreshResult> {
-  // Get issue from JSONL (includes external_links)
   const issue = getIssueFromJsonl(sudocodeDir, issueId);
   if (!issue) {
     return {
@@ -446,7 +359,6 @@ export async function refreshIssue(
     };
   }
 
-  // Check for external links
   const externalLinks = issue.external_links || [];
   if (externalLinks.length === 0) {
     return {
@@ -456,11 +368,10 @@ export async function refreshIssue(
     };
   }
 
-  // Use the first sync-enabled inbound link
   const link = externalLinks.find(
     (l) =>
       l.sync_enabled &&
-      (l.sync_direction === "inbound" || l.sync_direction === "bidirectional")
+      (l.sync_direction === "inbound" || l.sync_direction === "bidirectional"),
   );
 
   if (!link) {
@@ -471,7 +382,6 @@ export async function refreshIssue(
     };
   }
 
-  // Get provider
   const provider = await getProvider(link.provider, projectPath);
   if (!provider) {
     return {
@@ -484,105 +394,74 @@ export async function refreshIssue(
   try {
     await provider.initialize();
 
-    // Fetch fresh entity from provider
     const remoteEntity = await provider.fetchEntity(link.external_id);
 
-    // Handle stale/deleted entity
-    if (!remoteEntity) {
-      // Mark link as stale but don't delete local entity
-      updateIssueExternalLink(sudocodeDir, issueId, link.external_id, {
-        sync_enabled: false,
-        metadata: {
-          ...link.metadata,
+    return persistMutation(db, sudocodeDir, () => {
+      if (!remoteEntity) {
+        updateExternalLink(db, "issue", issueId, link.external_id, {
+          sync_enabled: false,
+          metadata: {
+            ...link.metadata,
+            stale: true,
+            stale_reason: "external_entity_not_found",
+            stale_at: new Date().toISOString(),
+          },
+        });
+
+        return {
+          updated: false,
+          hasLocalChanges: false,
           stale: true,
-          stale_reason: "external_entity_not_found",
-          stale_at: new Date().toISOString(),
-        },
-      });
+          error: "External entity no longer exists",
+        };
+      }
 
-      return {
-        updated: false,
-        hasLocalChanges: false,
-        stale: true,
-        error: "External entity no longer exists",
-      };
-    }
-
-    // Check for local changes
-    const hasLocalChanges = detectLocalChanges(
-      issue.title,
-      issue.content || "",
-      link.content_hash
-    );
-
-    // If local changes exist and not forcing, return preview
-    if (hasLocalChanges && !force) {
-      const changes = computeFieldChanges(
+      const hasLocalChanges = detectLocalChanges(
         issue.title,
         issue.content || "",
-        remoteEntity.title,
-        remoteEntity.description || ""
+        link.content_hash,
       );
 
-      return {
-        updated: false,
-        hasLocalChanges: true,
-        changes,
-      };
-    }
+      if (hasLocalChanges && !force) {
+        const changes = computeFieldChanges(
+          issue.title,
+          issue.content || "",
+          remoteEntity.title,
+          remoteEntity.description || "",
+        );
 
-    // Update issue with remote data
-    const newContentHash = computeContentHash(
-      remoteEntity.title,
-      remoteEntity.description || ""
-    );
-    const now = new Date().toISOString();
+        return {
+          updated: false,
+          hasLocalChanges: true,
+          changes,
+        };
+      }
 
-    // Update in database
-    const updatedIssue = updateExistingIssue(db, issueId, {
-      title: remoteEntity.title,
-      content: remoteEntity.description || "",
-    });
+      const newContentHash = computeContentHash(
+        remoteEntity.title,
+        remoteEntity.description || "",
+      );
+      const now = new Date().toISOString();
 
-    // Update external link metadata in JSONL
-    updateIssueExternalLink(sudocodeDir, issueId, link.external_id, {
-      content_hash: newContentHash,
-      last_synced_at: now,
-      external_updated_at: remoteEntity.updated_at,
-    });
+      const updatedIssue = updateExistingIssue(db, issueId, {
+        title: remoteEntity.title,
+        content: remoteEntity.description || "",
+      });
 
-    return {
-      updated: true,
-      hasLocalChanges: false,
-      entity: updatedIssue,
-    };
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
-
-    // Check for 404-like errors indicating stale entity
-    if (
-      errorMessage.includes("404") ||
-      errorMessage.includes("not found") ||
-      errorMessage.includes("Not Found")
-    ) {
-      updateIssueExternalLink(sudocodeDir, issueId, link.external_id, {
-        sync_enabled: false,
-        metadata: {
-          ...link.metadata,
-          stale: true,
-          stale_reason: "fetch_failed_404",
-          stale_at: new Date().toISOString(),
-        },
+      updateExternalLink(db, "issue", issueId, link.external_id, {
+        content_hash: newContentHash,
+        last_synced_at: now,
+        external_updated_at: remoteEntity.updated_at,
       });
 
       return {
-        updated: false,
+        updated: true,
         hasLocalChanges: false,
-        stale: true,
-        error: "External entity no longer exists",
+        entity: updatedIssue,
       };
-    }
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
 
     return {
       updated: false,
@@ -611,7 +490,7 @@ export async function bulkRefresh(
     provider?: string;
     entityIds?: string[];
     force?: boolean;
-  } = {}
+  } = {},
 ): Promise<BulkRefreshResult> {
   const { provider: providerFilter, entityIds, force = false } = options;
 
@@ -621,19 +500,16 @@ export async function bulkRefresh(
   let failed = 0;
   let stale = 0;
 
-  // Collect entities to refresh
   const entitiesToRefresh: Array<{
     id: string;
     type: "spec" | "issue";
   }> = [];
 
-  // Read specs and issues from JSONL
   const specsPath = path.join(sudocodeDir, "specs.jsonl");
   const issuesPath = path.join(sudocodeDir, "issues.jsonl");
   const specs = readJSONLSync<any>(specsPath, { skipErrors: true });
   const issues = readJSONLSync<any>(issuesPath, { skipErrors: true });
 
-  // Filter specs
   for (const spec of specs) {
     if (entityIds && !entityIds.includes(spec.id)) continue;
 
@@ -643,7 +519,7 @@ export async function bulkRefresh(
         l.sync_enabled &&
         (l.sync_direction === "inbound" ||
           l.sync_direction === "bidirectional") &&
-        (!providerFilter || l.provider === providerFilter)
+        (!providerFilter || l.provider === providerFilter),
     );
 
     if (hasMatchingLink) {
@@ -651,7 +527,6 @@ export async function bulkRefresh(
     }
   }
 
-  // Filter issues
   for (const issue of issues) {
     if (entityIds && !entityIds.includes(issue.id)) continue;
 
@@ -661,7 +536,7 @@ export async function bulkRefresh(
         l.sync_enabled &&
         (l.sync_direction === "inbound" ||
           l.sync_direction === "bidirectional") &&
-        (!providerFilter || l.provider === providerFilter)
+        (!providerFilter || l.provider === providerFilter),
     );
 
     if (hasMatchingLink) {
@@ -669,7 +544,6 @@ export async function bulkRefresh(
     }
   }
 
-  // Refresh each entity
   for (const entity of entitiesToRefresh) {
     try {
       let result: RefreshResult;
@@ -680,7 +554,7 @@ export async function bulkRefresh(
           sudocodeDir,
           projectPath,
           entity.id,
-          force
+          force,
         );
       } else {
         result = await refreshIssue(
@@ -688,7 +562,7 @@ export async function bulkRefresh(
           sudocodeDir,
           projectPath,
           entity.id,
-          force
+          force,
         );
       }
 
@@ -713,7 +587,6 @@ export async function bulkRefresh(
           status: "updated",
         });
       } else if (result.hasLocalChanges) {
-        // Skipped due to local changes (and not forcing)
         skipped++;
         results.push({
           entityId: entity.id,
@@ -721,7 +594,6 @@ export async function bulkRefresh(
           error: "Local changes detected - use force=true to overwrite",
         });
       } else {
-        // No changes needed
         skipped++;
         results.push({
           entityId: entity.id,

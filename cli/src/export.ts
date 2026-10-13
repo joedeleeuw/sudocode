@@ -17,11 +17,11 @@ import { listIssues } from "./operations/issues.js";
 import { getOutgoingRelationships } from "./operations/relationships.js";
 import { getTags } from "./operations/tags.js";
 import { listFeedback } from "./operations/feedback.js";
-import { writeJSONL } from "./jsonl.js";
+import { publishJSONL, recoverPublication } from "./tracker-publication.js";
+import * as path from "path";
 import {
   readJSONLSnapshot,
   isJSONLSynced,
-  recordJSONLSync,
   type JSONLSnapshot,
 } from "./jsonl-sync-state.js";
 
@@ -72,12 +72,44 @@ function sortFeedback(feedback: FeedbackJSONL[]): FeedbackJSONL[] {
  * Sort external links for deterministic JSONL output
  * Sorts by: provider, then external_id
  */
-function sortExternalLinks(links: ExternalLink[] | undefined): ExternalLink[] | undefined {
+function sortExternalLinks(
+  links: ExternalLink[] | undefined,
+): ExternalLink[] | undefined {
   if (!links || links.length === 0) return links;
   return [...links].sort((a, b) => {
     if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
     return a.external_id.localeCompare(b.external_id);
   });
+}
+
+function feedbackForEntity(
+  db: Database.Database,
+  entityId: string,
+  entityType: "spec" | "issue",
+) {
+  return sortFeedback(
+    listFeedback(db)
+      .filter((feedback) =>
+        feedback.from_id
+          ? entityType === "issue" && feedback.from_id === entityId
+          : feedback.to_id === entityId,
+      )
+      .map((feedback) => ({
+        id: feedback.id,
+        from_id: feedback.from_id || undefined,
+        to_id: feedback.to_id,
+        feedback_type: feedback.feedback_type,
+        content: feedback.content,
+        agent: feedback.agent,
+        anchor:
+          typeof feedback.anchor === "string"
+            ? JSON.parse(feedback.anchor)
+            : feedback.anchor,
+        dismissed: feedback.dismissed,
+        created_at: feedback.created_at,
+        updated_at: feedback.updated_at,
+      })),
+  );
 }
 
 /**
@@ -87,12 +119,10 @@ function sortExternalLinks(links: ExternalLink[] | undefined): ExternalLink[] | 
 export function specToJSONL(
   db: Database.Database,
   spec: Spec,
-  existingExternalLinks?: Map<string, ExternalLink[]>
+  existingExternalLinks?: Map<string, ExternalLink[]>,
 ): SpecJSONL {
-  // Get outgoing relationships
   const relationships = getOutgoingRelationships(db, spec.id, "spec");
 
-  // Convert to JSONL format
   const relationshipsJSONL: RelationshipJSONL[] = relationships.map((rel) => ({
     from: rel.from_id,
     from_type: rel.from_type,
@@ -101,15 +131,15 @@ export function specToJSONL(
     type: rel.relationship_type,
   }));
 
-  // Get tags
   const tags = getTags(db, spec.id, "spec");
 
-  // Get external_links - prefer from spec if present, otherwise from existing JSONL
-  const externalLinks = spec.external_links ?? existingExternalLinks?.get(spec.id);
+  const externalLinks =
+    spec.external_links ?? existingExternalLinks?.get(spec.id);
 
+  const feedback = feedbackForEntity(db, spec.id, "spec");
   return {
     ...spec,
-    // Sort arrays for deterministic output (reduces JSONL churn)
+    feedback: feedback.length > 0 ? feedback : undefined,
     relationships: sortRelationships(relationshipsJSONL),
     tags: sortTags(tags),
     external_links: sortExternalLinks(externalLinks),
@@ -123,12 +153,10 @@ export function specToJSONL(
 export function issueToJSONL(
   db: Database.Database,
   issue: Issue,
-  existingExternalLinks?: Map<string, ExternalLink[]>
+  existingExternalLinks?: Map<string, ExternalLink[]>,
 ): IssueJSONL {
-  // Get outgoing relationships
   const relationships = getOutgoingRelationships(db, issue.id, "issue");
 
-  // Convert to JSONL format
   const relationshipsJSONL: RelationshipJSONL[] = relationships.map((rel) => ({
     from: rel.from_id,
     from_type: rel.from_type,
@@ -137,31 +165,13 @@ export function issueToJSONL(
     type: rel.relationship_type,
   }));
 
-  // Get tags
   const tags = getTags(db, issue.id, "issue");
 
-  // Get feedback provided by this issue
-  const feedbackList = listFeedback(db, { from_id: issue.id });
-  const feedbackJSONL: FeedbackJSONL[] = feedbackList.map((feedback) => ({
-    id: feedback.id,
-    from_id: feedback.from_id,
-    to_id: feedback.to_id,
-    feedback_type: feedback.feedback_type,
-    content: feedback.content,
-    agent: feedback.agent,
-    anchor:
-      feedback.anchor && typeof feedback.anchor === "string"
-        ? JSON.parse(feedback.anchor)
-        : feedback.anchor,
-    dismissed: feedback.dismissed,
-    created_at: feedback.created_at,
-    updated_at: feedback.updated_at,
-  }));
+  const feedbackJSONL = feedbackForEntity(db, issue.id, "issue");
 
-  // Get external_links - prefer from issue if present, otherwise from existing JSONL
-  const externalLinks = issue.external_links ?? existingExternalLinks?.get(issue.id);
+  const externalLinks =
+    issue.external_links ?? existingExternalLinks?.get(issue.id);
 
-  // Sort arrays for deterministic output (reduces JSONL churn)
   const sortedFeedback = sortFeedback(feedbackJSONL);
 
   return {
@@ -180,19 +190,16 @@ export function issueToJSONL(
 export function exportSpecsToJSONL(
   db: Database.Database,
   options: ExportOptions = {},
-  existingExternalLinks?: Map<string, ExternalLink[]>
+  existingExternalLinks?: Map<string, ExternalLink[]>,
 ): SpecJSONL[] {
   const { since } = options;
 
-  // Get all specs (including archived)
   const specs = listSpecs(db);
 
-  // Filter by timestamp if requested
   const filtered = since
     ? specs.filter((spec) => new Date(spec.updated_at) > since)
     : specs;
 
-  // Convert to JSONL format with relationships, tags, and external_links
   return filtered.map((spec) => specToJSONL(db, spec, existingExternalLinks));
 }
 
@@ -203,20 +210,19 @@ export function exportSpecsToJSONL(
 export function exportIssuesToJSONL(
   db: Database.Database,
   options: ExportOptions = {},
-  existingExternalLinks?: Map<string, ExternalLink[]>
+  existingExternalLinks?: Map<string, ExternalLink[]>,
 ): IssueJSONL[] {
   const { since } = options;
 
-  // Get all issues (including archived)
   const issues = listIssues(db);
 
-  // Filter by timestamp if requested
   const filtered = since
     ? issues.filter((issue) => new Date(issue.updated_at) > since)
     : issues;
 
-  // Convert to JSONL format with relationships, tags, and external_links
-  return filtered.map((issue) => issueToJSONL(db, issue, existingExternalLinks));
+  return filtered.map((issue) =>
+    issueToJSONL(db, issue, existingExternalLinks),
+  );
 }
 
 /**
@@ -224,7 +230,7 @@ export function exportIssuesToJSONL(
  * (to preserve them since SQLite doesn't store them)
  */
 function externalLinksById(
-  entities: Array<{ id: string; external_links?: ExternalLink[] }>
+  entities: Array<{ id: string; external_links?: ExternalLink[] }>,
 ): Map<string, ExternalLink[]> {
   const map = new Map<string, ExternalLink[]>();
   for (const entity of entities) {
@@ -243,7 +249,7 @@ function externalLinksById(
 function unimportedIds(
   db: Database.Database,
   snapshot: JSONLSnapshot<{ id: string; uuid: string }>,
-  dbEntities: Array<{ uuid: string }>
+  dbEntities: Array<{ uuid: string }>,
 ): string[] {
   if (isJSONLSynced(db, snapshot)) {
     return [];
@@ -265,11 +271,11 @@ export class UnimportedJSONLEntitiesError extends Error {
         unimported
           .map(
             ({ filePath, ids }) =>
-              `${filePath} has ${ids.length} entities the database never imported (${ids.join(", ")})`
+              `${filePath} has ${ids.length} entities the database never imported (${ids.join(", ")})`,
           )
           .join("; ") +
         ". Exporting would delete them from the JSONL. Run `sudocode import` (or restart the server) " +
-        "to load the JSONL first; import makes the database match the JSONL."
+        "to load the JSONL first; import makes the database match the JSONL.",
     );
     this.name = "UnimportedJSONLEntitiesError";
   }
@@ -279,10 +285,37 @@ export class UnimportedJSONLEntitiesError extends Error {
  * Export both specs and issues to JSONL files
  * Preserves external_links from existing JSONL files
  */
-export async function exportToJSONL(
+function serializeEntities(entities: (SpecJSONL | IssueJSONL)[]) {
+  return (
+    [...entities]
+      .sort(
+        (left, right) =>
+          left.created_at.localeCompare(right.created_at) ||
+          left.id.localeCompare(right.id),
+      )
+      .map((entity) => JSON.stringify(entity))
+      .join("\n") + "\n"
+  );
+}
+
+export function exportToJSONL(
   db: Database.Database,
-  options: ExportOptions = {}
-): Promise<{ specsCount: number; issuesCount: number }> {
+  options: ExportOptions = {},
+): { specsCount: number; issuesCount: number } {
+  if (!db.inTransaction) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const counts = exportToJSONL(db, options);
+      db.exec("COMMIT");
+      recoverPublication(db, options.outputDir ?? ".sudocode");
+      return counts;
+    } catch (error) {
+      if (db.inTransaction) db.exec("ROLLBACK");
+      recoverPublication(db, options.outputDir ?? ".sudocode");
+      throw error;
+    }
+  }
+  recoverPublication(db, options.outputDir ?? ".sudocode");
   const {
     outputDir = ".sudocode",
     specsFile = "specs.jsonl",
@@ -309,23 +342,21 @@ export async function exportToJSONL(
     throw new UnimportedJSONLEntitiesError(unimported);
   }
 
-  // Export specs with preserved external_links
   const specs = exportSpecsToJSONL(
     db,
     options,
-    externalLinksById(existingSpecs.entities)
+    externalLinksById(existingSpecs.entities),
   );
-  await writeJSONL(specsPath, specs);
-  recordJSONLSync(db, readJSONLSnapshot(specsPath));
 
-  // Export issues with preserved external_links
   const issues = exportIssuesToJSONL(
     db,
     options,
-    externalLinksById(existingIssues.entities)
+    externalLinksById(existingIssues.entities),
   );
-  await writeJSONL(issuesPath, issues);
-  recordJSONLSync(db, readJSONLSnapshot(issuesPath));
+  publishJSONL(db, [
+    { filePath: path.resolve(specsPath), content: serializeEntities(specs) },
+    { filePath: path.resolve(issuesPath), content: serializeEntities(issues) },
+  ]);
 
   return {
     specsCount: specs.length,
@@ -343,7 +374,7 @@ export class ExportDebouncer {
   constructor(
     private db: Database.Database,
     private delayMs: number = 5000,
-    private options: ExportOptions = {}
+    private options: ExportOptions = {},
   ) {}
 
   /**
@@ -418,7 +449,7 @@ export class ExportDebouncer {
 export function createDebouncedExport(
   db: Database.Database,
   delayMs: number = 5000,
-  options: ExportOptions = {}
+  options: ExportOptions = {},
 ): ExportDebouncer {
   return new ExportDebouncer(db, delayMs, options);
 }

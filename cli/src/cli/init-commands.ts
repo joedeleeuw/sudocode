@@ -19,6 +19,8 @@ import type { StorageMode } from "@sudocode-ai/types";
 export function buildGitignore(sourceOfTruth: StorageMode): string {
   const lines = [
     "cache.db*",
+    ".publication.json*",
+    "*.publication",
     "worktrees/",
     "config.local.json",
     "merge-driver.log",

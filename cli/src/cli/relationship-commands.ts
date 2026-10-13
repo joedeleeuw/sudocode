@@ -6,7 +6,7 @@ import chalk from "chalk";
 import * as path from "path";
 import type Database from "better-sqlite3";
 import { addRelationship } from "../operations/relationships.js";
-import { exportToJSONL } from "../export.js";
+import { persistMutation } from "../tracker-mutation.js";
 import { syncJSONLToMarkdown } from "../sync.js";
 import { getSpec } from "../operations/specs.js";
 import { getIssue } from "../operations/issues.js";
@@ -31,24 +31,23 @@ export async function handleLink(
   ctx: CommandContext,
   from: string,
   to: string,
-  options: LinkOptions
+  options: LinkOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Validate relationship type
     if (!isValidRelationshipType(options.type)) {
       console.error(chalk.red(`✗ Invalid relationship type: ${options.type}`));
       console.error(
-        chalk.gray(`Valid types: ${getValidRelationshipTypes().join(", ")}`)
+        chalk.gray(`Valid types: ${getValidRelationshipTypes().join(", ")}`),
       );
       process.exit(1);
     }
 
-    // Determine entity types by checking existence
+    const relationshipType = options.type;
+
     let fromType: "spec" | "issue";
     let toType: "spec" | "issue";
 
-    // Determine 'from' entity type
     if (getSpec(ctx.db, from)) {
       fromType = "spec";
     } else if (getIssue(ctx.db, from)) {
@@ -58,7 +57,6 @@ export async function handleLink(
       process.exit(1);
     }
 
-    // Determine 'to' entity type
     if (getSpec(ctx.db, to)) {
       toType = "spec";
     } else if (getIssue(ctx.db, to)) {
@@ -68,18 +66,16 @@ export async function handleLink(
       process.exit(1);
     }
 
-    addRelationship(ctx.db, {
-      from_id: from,
-      from_type: fromType,
-      to_id: to,
-      to_type: toType,
-      relationship_type: options.type,
-    });
+    persistMutation(ctx.db, ctx.outputDir, () =>
+      addRelationship(ctx.db, {
+        from_id: from,
+        from_type: fromType,
+        to_id: to,
+        to_type: toType,
+        relationship_type: relationshipType,
+      }),
+    );
 
-    // Export to JSONL to persist the relationship
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Sync the "from" entity back to markdown so the relationship appears in frontmatter
     if (fromType === "spec") {
       const spec = getSpec(ctx.db, from);
       if (spec) {
@@ -97,7 +93,11 @@ export async function handleLink(
 
     if (ctx.jsonOutput) {
       console.log(
-        JSON.stringify({ from, to, type: options.type, success: true }, null, 2)
+        JSON.stringify(
+          { from, to, type: options.type, success: true },
+          null,
+          2,
+        ),
       );
     } else {
       console.log(chalk.green("✓ Created relationship"));
@@ -105,12 +105,24 @@ export async function handleLink(
         chalk.cyan(from),
         chalk.yellow(options.type),
         "→",
-        chalk.cyan(to)
+        chalk.cyan(to),
       );
     }
-    await trackCommand(ctx.outputDir, "link", { from_id: from, to_id: to, type: options.type }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "link",
+      { from_id: from, to_id: to, type: options.type },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "link", { from_id: from, to_id: to, type: options.type }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "link",
+      { from_id: from, to_id: to, type: options.type },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to create relationship"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

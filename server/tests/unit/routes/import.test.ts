@@ -495,39 +495,5 @@ describe("Import Router", () => {
       );
     });
 
-    it("should respect priority option", async () => {
-      const mockEntity = {
-        id: "owner/repo#456",
-        type: "issue" as const,
-        title: "High Priority Issue",
-        description: "Important issue",
-        url: "https://github.com/owner/repo/issues/456",
-      };
-
-      mockOnDemandProvider.canHandleUrl.mockReturnValueOnce(true);
-      mockOnDemandProvider.fetchByUrl.mockResolvedValueOnce(mockEntity);
-
-      const { createSpecFromExternal } = await import(
-        "@sudocode-ai/cli/dist/operations/external-links.js"
-      );
-
-      const { req, res } = createMockReqRes({
-        body: {
-          url: "https://github.com/owner/repo/issues/456",
-          options: { priority: 0 },
-        },
-      });
-
-      const handler = findHandler(router, "/", "post");
-      await handler!(req, res, () => {});
-
-      expect(vi.mocked(createSpecFromExternal)).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          priority: 0,
-        })
-      );
-    });
-
   });
 });

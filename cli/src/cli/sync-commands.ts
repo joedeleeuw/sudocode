@@ -36,7 +36,6 @@ export async function handleSync(
   ctx: CommandContext,
   options: SyncOptions
 ): Promise<void> {
-  // Check if sudocode is initialized, auto-initialize if not
   if (!isInitialized(ctx.outputDir)) {
     console.log(chalk.blue("Initializing sudocode..."));
     console.log();
@@ -56,7 +55,6 @@ export async function handleSync(
   }
 
   if (options.watch) {
-    // Start file watcher
     console.log(chalk.blue("Starting file watcher..."));
     console.log(chalk.gray(`  Watching: ${ctx.outputDir}`));
     console.log(chalk.gray("  Press Ctrl+C to stop"));
@@ -75,22 +73,15 @@ export async function handleSync(
       },
     });
 
-    // Setup graceful shutdown
     setupGracefulShutdown(control);
 
-    // Keep process alive
     await new Promise(() => {
-      // This promise never resolves - the process will exit via SIGINT/SIGTERM
     });
   } else if (options.fromMarkdown) {
-    // Manual sync from markdown to database
     await handleSyncFromMarkdown(ctx);
   } else if (options.toMarkdown) {
-    // Manual sync from database to markdown
     await handleSyncToMarkdown(ctx);
   } else {
-    // Auto-detect sync direction based on file modification times
-    // TODO: Independently handle sync direction from specs and issues.
     const { direction, reason } = determineSyncDirection(ctx);
 
     console.log(chalk.blue("Detecting sync direction..."));
@@ -186,12 +177,11 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
 
   const syncOptions = {
     outputDir: ctx.outputDir,
-    autoExport: false,
+    autoExport: true,
     autoInitialize: true,
     writeBackFrontmatter: true,
   };
 
-  // Sync specs
   if (fs.existsSync(specsDir)) {
     const specFiles = findMarkdownFiles(specsDir);
     console.log(chalk.gray(`  Found ${specFiles.length} spec files`));
@@ -217,7 +207,6 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
     }
   }
 
-  // Sync issues
   if (fs.existsSync(issuesDir)) {
     const issueFiles = findMarkdownFiles(issuesDir);
     console.log(chalk.gray(`  Found ${issueFiles.length} issue files`));
@@ -243,11 +232,6 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
     }
   }
 
-  // Export to JSONL
-  if (syncedCount > 0) {
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-  }
-
   console.log();
   console.log(chalk.green(`✓ Synced ${syncedCount} files to database`));
   if (errorCount > 0) {
@@ -264,22 +248,18 @@ async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
   const specsDir = path.join(ctx.outputDir, "specs");
   const issuesDir = path.join(ctx.outputDir, "issues");
 
-  // Ensure directories exist
   fs.mkdirSync(specsDir, { recursive: true });
   fs.mkdirSync(issuesDir, { recursive: true });
 
   let syncedCount = 0;
   let errorCount = 0;
 
-  // Sync all specs
   const specs = listSpecs(ctx.db, {});
   console.log(chalk.gray(`  Found ${specs.length} specs in database`));
 
   for (const spec of specs) {
-    // Check if file exists at stored path, otherwise use syncFileWithRename
     let filePath = path.join(ctx.outputDir, spec.file_path);
     if (!fs.existsSync(filePath)) {
-      // Find existing file, rename if title changed, or generate new filename
       filePath = syncFileWithRename(spec.id, specsDir, spec.title);
     }
 
@@ -300,12 +280,10 @@ async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
     }
   }
 
-  // Sync all issues
   const issues = listIssues(ctx.db, {});
   console.log(chalk.gray(`  Found ${issues.length} issues in database`));
 
   for (const issue of issues) {
-    // Find existing file, rename if title changed, or generate new filename
     const filePath = syncFileWithRename(issue.id, issuesDir, issue.title);
 
     const result = await syncJSONLToMarkdown(
@@ -379,7 +357,6 @@ function getMostRecentModTime(files: string[]): Date | null {
         mostRecent = mtime;
       }
     } catch (error) {
-      // Ignore files that don't exist or can't be accessed
       continue;
     }
   }
@@ -410,27 +387,22 @@ function determineSyncDirection(ctx: CommandContext): {
   direction: "to-markdown" | "from-markdown" | "no-sync";
   reason: string;
 } {
-  // Check source of truth setting first
   const config = getConfig(ctx.outputDir);
   if (isMarkdownFirst(config)) {
-    // Markdown is source of truth - always sync from markdown
     return {
       direction: "from-markdown",
       reason: "Markdown is source of truth (config.sourceOfTruth = 'markdown')",
     };
   }
 
-  // JSONL/DB is source of truth - use timestamp comparison
   const specsDir = path.join(ctx.outputDir, "specs");
   const issuesDir = path.join(ctx.outputDir, "issues");
   const specsJsonl = path.join(ctx.outputDir, "specs.jsonl");
   const issuesJsonl = path.join(ctx.outputDir, "issues.jsonl");
 
-  // Get JSONL modification times
   const specsJsonlTime = getFileModTime(specsJsonl);
   const issuesJsonlTime = getFileModTime(issuesJsonl);
 
-  // Get markdown file times
   let specMarkdownFiles: string[] = [];
   let issueMarkdownFiles: string[] = [];
 
@@ -444,7 +416,6 @@ function determineSyncDirection(ctx: CommandContext): {
   const specsMarkdownTime = getMostRecentModTime(specMarkdownFiles);
   const issuesMarkdownTime = getMostRecentModTime(issueMarkdownFiles);
 
-  // Get the most recent updated_at timestamp from database
   const specs = listSpecs(ctx.db, {});
   const issues = listIssues(ctx.db, {});
 
@@ -461,25 +432,19 @@ function determineSyncDirection(ctx: CommandContext): {
         )
       : null;
 
-  // Determine sync direction
   let syncToMarkdown = false;
   let syncFromMarkdown = false;
   const reasons: string[] = [];
 
-  // Check specs
   if (!dbSpecsTime && !specsMarkdownTime) {
-    // Neither exists - no sync needed
     reasons.push("No spec files or database entries found");
   } else if (!dbSpecsTime && specsMarkdownTime) {
-    // Only markdown exists - sync from markdown
     syncFromMarkdown = true;
     reasons.push("Specs database empty, markdown exists");
   } else if (dbSpecsTime && !specsMarkdownTime) {
-    // Only database exists - sync to markdown
     syncToMarkdown = true;
     reasons.push("Spec markdown files missing, database has entries");
   } else if (dbSpecsTime && specsMarkdownTime) {
-    // Both exist - compare markdown file time against database time
     if (specsMarkdownTime > dbSpecsTime) {
       syncFromMarkdown = true;
       reasons.push(
@@ -499,20 +464,15 @@ function determineSyncDirection(ctx: CommandContext): {
     }
   }
 
-  // Check issues
   if (!dbIssuesTime && !issuesMarkdownTime) {
-    // Neither exists - no sync needed
     reasons.push("No issue files or database entries found");
   } else if (!dbIssuesTime && issuesMarkdownTime) {
-    // Only markdown exists - sync from markdown
     syncFromMarkdown = true;
     reasons.push("Issues database empty, markdown exists");
   } else if (dbIssuesTime && !issuesMarkdownTime) {
-    // Only database exists - sync to markdown
     syncToMarkdown = true;
     reasons.push("Issue markdown files missing, database has entries");
   } else if (dbIssuesTime && issuesMarkdownTime) {
-    // Both exist - compare markdown file time against database time
     if (issuesMarkdownTime > dbIssuesTime) {
       syncFromMarkdown = true;
       reasons.push(
@@ -532,11 +492,7 @@ function determineSyncDirection(ctx: CommandContext): {
     }
   }
 
-  // Decide direction - prefer database (to-markdown) in conflicts since database is source of truth
-  // Only sync from-markdown if markdown is clearly newer (user edited files)
   if (syncFromMarkdown && syncToMarkdown) {
-    // Mixed state - prefer database as source of truth
-    // This prevents stale markdown files from overwriting fresh database/JSONL data
     return {
       direction: "to-markdown",
       reason: reasons.join("; ") + " (using database as source of truth)",

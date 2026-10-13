@@ -27,7 +27,7 @@ import type Database from "better-sqlite3";
 import { createIssuesRouter } from "../../src/routes/issues.js";
 import { createSpecsRouter } from "../../src/routes/specs.js";
 import { createImportRouter } from "../../src/routes/import.js";
-import { cleanupExport, triggerExport } from "../../src/services/export.js";
+import { triggerExport } from "../../src/services/export.js";
 import { ProjectManager } from "../../src/services/project-manager.js";
 import { ProjectRegistry } from "../../src/services/project-registry.js";
 import { requireProject } from "../../src/middleware/project-context.js";
@@ -137,7 +137,6 @@ describe("Refresh API Integration Tests", () => {
 
   afterAll(async () => {
     // Cleanup
-    cleanupExport();
     await projectManager?.shutdown();
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });

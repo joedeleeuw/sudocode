@@ -8,7 +8,6 @@ import request from "supertest";
 import express from "express";
 import { createIssuesRouter } from "../../src/routes/issues.js";
 import { createSpecsRouter } from "../../src/routes/specs.js";
-import { cleanupExport } from "../../src/services/export.js";
 import { parseMarkdownFile } from "@sudocode-ai/cli/dist/markdown.js";
 import { findExistingEntityFile } from "@sudocode-ai/cli/dist/filename-generator.js";
 import { ProjectManager } from "../../src/services/project-manager.js";
@@ -100,7 +99,6 @@ describe("JSONL Export Integration", () => {
 
   afterAll(async () => {
     // Clean up export debouncer first
-    cleanupExport();
     // Shutdown project manager
     await projectManager.shutdown();
     if (fs.existsSync(testDir)) {

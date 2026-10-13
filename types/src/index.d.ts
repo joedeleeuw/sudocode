@@ -5,9 +5,6 @@
 import type { IntegrationsConfig } from "./integrations.js";
 import type { VoiceSettingsConfig } from "./voice.js";
 
-// =============================================================================
-// Integration Types (External Links)
-// =============================================================================
 
 /**
  * Direction of sync between sudocode and external system
@@ -58,9 +55,6 @@ export interface ExternalLink {
   import_metadata?: Record<string, unknown>;
 }
 
-// =============================================================================
-// Core Entities
-// =============================================================================
 
 export interface Spec {
   id: string;
@@ -212,6 +206,7 @@ export type FeedbackType = "comment" | "suggestion" | "request";
  * JSONL format types
  */
 export interface SpecJSONL extends Spec {
+  feedback?: FeedbackJSONL[];
   relationships: RelationshipJSONL[];
   tags: string[];
 }
@@ -340,7 +335,6 @@ export interface CodespacesProviderConfig {
  * Coder provider configuration (future support)
  */
 export interface CoderProviderConfig {
-  // Future coder configuration
 }
 
 /**
@@ -514,30 +508,24 @@ export interface Execution {
   prompt: string | null;
   config: string | null;
 
-  // Process information
   agent_type: AgentType;
   session_id: string | null;
   workflow_execution_id: string | null;
 
-  // Git/branch information
   target_branch: string;
   branch_name: string;
   before_commit: string | null;
   after_commit: string | null;
   worktree_path: string | null;
 
-  // Status
   status: ExecutionStatus;
 
-  // Timing
   created_at: string;
   updated_at: string;
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
 
-  // Results and metadata
-  // TODO: Expand as a proper JSON object
   exit_code: number | null;
   error_message: string | null;
   error: string | null;
@@ -547,13 +535,11 @@ export interface Execution {
 
   parent_execution_id: string | null;
 
-  // Multi-step workflow support (future extension)
   step_type: string | null;
   step_index: number | null;
   step_config: string | null;
 }
 
-// Re-export execution artifact types
 export type {
   FileChangeStat,
   ExecutionChangesResult,
@@ -565,34 +551,26 @@ export type {
  * See workflows.d.ts for detailed workflow types
  */
 export type {
-  // Status types
   WorkflowStatus,
   WorkflowStepStatus,
-  // Source types
   WorkflowSource,
   WorkflowSourceSpec,
   WorkflowSourceIssues,
   WorkflowSourceRootIssue,
   WorkflowSourceGoal,
-  // Escalation types (Human-in-the-Loop)
   EscalationStatus,
   EscalationResponse,
   EscalationData,
-  // Configuration types
   WorkflowParallelism,
   WorkflowFailureStrategy,
   WorkflowAutonomyLevel,
   WorkflowConfig,
-  // Core entity types
   WorkflowStep,
   Workflow,
-  // Event types
   WorkflowEventType,
   WorkflowEvent,
-  // Database row types
   WorkflowRow,
   WorkflowEventRow,
-  // Utility types
   CreateWorkflowOptions,
   DependencyGraph,
 } from "./workflows.js";
@@ -602,25 +580,20 @@ export type {
  * See integrations.d.ts for detailed integration types
  */
 export type {
-  // Configuration types
   IntegrationProviderConfig,
   IntegrationsConfig,
   IntegrationConfig, // Deprecated alias
-  // Plugin types
   IntegrationPlugin,
   IntegrationProvider,
   PluginValidationResult,
   PluginTestResult,
   PluginConfigSchema,
-  // Sync types
   ExternalEntity,
   ExternalChange,
   SyncResult,
   SyncConflict,
-  // On-demand import types
   OnDemandImportCapable,
   ExternalComment,
-  // Search types
   SearchOptions,
   SearchResult,
 } from "./integrations.js";
@@ -630,31 +603,23 @@ export type {
  * See voice.d.ts for detailed voice types
  */
 export type {
-  // Provider types
   STTProvider,
   TTSProvider,
-  // STT types
   TranscriptionResult,
   STTOptions,
-  // TTS types
   TTSOptions,
   SynthesizeRequest,
   SynthesizeResponse,
-  // Voice input state types
   VoiceInputState,
   VoiceInputErrorCode,
   VoiceInputError,
-  // API request/response types
   TranscribeRequest,
   TranscribeResponse,
-  // Configuration types
   STTConfig,
   TTSConfig,
   VoiceConfig,
-  // Narration event types
   NarrationCategory,
   NarrationPriority,
   VoiceNarrationEvent,
-  // User preferences
   VoicePreferences,
 } from "./voice.js";

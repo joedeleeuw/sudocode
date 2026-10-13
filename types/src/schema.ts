@@ -16,7 +16,7 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 -- Optimize for performance
-PRAGMA synchronous=NORMAL;
+PRAGMA synchronous=FULL;
 PRAGMA temp_store=MEMORY;
 PRAGMA mmap_size=30000000000;
 PRAGMA page_size=4096;
@@ -186,7 +186,6 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 `;
 
-// Prompt templates table
 export const PROMPT_TEMPLATES_TABLE = `
 CREATE TABLE IF NOT EXISTS prompt_templates (
     id TEXT PRIMARY KEY,
@@ -201,11 +200,6 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
 );
 `;
 
-// Execution logs table - stores detailed execution output
-// Supports two formats:
-// - raw_logs: Legacy JSONL format (newline-delimited JSON from stream-json output)
-// - normalized_entry: New NDJSON format (NormalizedEntry objects from agent-execution-engine)
-// At least one of raw_logs or normalized_entry must be non-null
 export const EXECUTION_LOGS_TABLE = `
 CREATE TABLE IF NOT EXISTS execution_logs (
     execution_id TEXT PRIMARY KEY,
@@ -220,8 +214,6 @@ CREATE TABLE IF NOT EXISTS execution_logs (
 );
 `;
 
-// Workflows table - orchestrates multi-issue execution
-// Supports both sequential and agent-managed workflow strategies
 export const WORKFLOWS_TABLE = `
 CREATE TABLE IF NOT EXISTS workflows (
     id TEXT PRIMARY KEY,
@@ -247,7 +239,6 @@ CREATE TABLE IF NOT EXISTS workflows (
 );
 `;
 
-// Workflow events table - tracks workflow lifecycle events for orchestrator wakeups
 export const WORKFLOW_EVENTS_TABLE = `
 CREATE TABLE IF NOT EXISTS workflow_events (
     id TEXT PRIMARY KEY,
@@ -263,10 +254,6 @@ CREATE TABLE IF NOT EXISTS workflow_events (
 );
 `;
 
-// JSONL sync state - SHA-256 of each tracked JSONL file as this database last
-// imported or exported it. A file whose current digest differs (or has no row)
-// holds changes the database has not seen, so it must be imported before the
-// database is read or exported over it. sha256 is NULL when the file was absent.
 export const JSONL_SYNC_STATE_TABLE = `
 CREATE TABLE IF NOT EXISTS jsonl_sync_state (
     file_path TEXT PRIMARY KEY,

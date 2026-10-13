@@ -1,3 +1,4 @@
+import { persistMutation } from "@sudocode-ai/cli/dist/tracker-mutation.js";
 /**
  * Relationships API routes (mapped to /api/relationships)
  *
@@ -14,7 +15,7 @@ import {
   getEntityIncomingRelationships,
 } from "../services/relationships.js";
 import { broadcastRelationshipUpdate } from "../services/websocket.js";
-import { persistMutation } from "../services/export.js";
+
 
 export function createRelationshipsRouter(): Router {
   const router = Router();
@@ -26,7 +27,6 @@ export function createRelationshipsRouter(): Router {
     try {
       const { entity_type, entity_id } = req.params;
 
-      // Validate entity_type
       if (entity_type !== "spec" && entity_type !== "issue") {
         res.status(400).json({
           success: false,
@@ -67,7 +67,6 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        // Validate entity_type
         if (entity_type !== "spec" && entity_type !== "issue") {
           res.status(400).json({
             success: false,
@@ -110,7 +109,6 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        // Validate entity_type
         if (entity_type !== "spec" && entity_type !== "issue") {
           res.status(400).json({
             success: false,
@@ -157,7 +155,6 @@ export function createRelationshipsRouter(): Router {
         metadata,
       } = req.body;
 
-      // Validate required fields
       if (!from_id || typeof from_id !== "string") {
         res.status(400).json({
           success: false,
@@ -203,7 +200,6 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      // Validate relationship_type
       const validTypes = [
         "blocks",
         "related",
@@ -221,7 +217,6 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      // Create relationship and persist it to the tracked JSONL atomically
       const relationship = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -236,7 +231,6 @@ export function createRelationshipsRouter(): Router {
           })
       );
 
-      // Broadcast relationship creation to WebSocket clients
       broadcastRelationshipUpdate(req.project!.id, "created", relationship);
 
       res.status(201).json({
@@ -246,7 +240,6 @@ export function createRelationshipsRouter(): Router {
     } catch (error) {
       console.error("Error creating relationship:", error);
 
-      // Handle specific errors
       if (error instanceof Error) {
         if (error.message.includes("not found")) {
           res.status(404).json({
@@ -284,7 +277,6 @@ export function createRelationshipsRouter(): Router {
       const { from_id, from_type, to_id, to_type, relationship_type } =
         req.body;
 
-      // Validate required fields
       if (!from_id || typeof from_id !== "string") {
         res.status(400).json({
           success: false,
@@ -330,7 +322,6 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      // Delete relationship and persist the deletion to the tracked JSONL atomically
       const deleted = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -346,7 +337,6 @@ export function createRelationshipsRouter(): Router {
       );
 
       if (deleted) {
-        // Broadcast relationship deletion to WebSocket clients
         broadcastRelationshipUpdate(req.project!.id, "deleted", {
           from_id,
           from_type,

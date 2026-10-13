@@ -21,13 +21,14 @@ import {
 } from "../operations/relationships.js";
 import { getTags, setTags } from "../operations/tags.js";
 import { listFeedback } from "../operations/feedback.js";
-import { exportToJSONL } from "../export.js";
+import { persistMutation } from "../tracker-mutation.js";
 import { syncJSONLToMarkdown } from "../sync.js";
-import { generateUniqueFilename, findExistingEntityFile, syncFileWithRename } from "../filename-generator.js";
 import {
-  isValidIssueStatus,
-  getValidIssueStatuses,
-} from "../validation.js";
+  generateUniqueFilename,
+  findExistingEntityFile,
+  syncFileWithRename,
+} from "../filename-generator.js";
+import { isValidIssueStatus, getValidIssueStatuses } from "../validation.js";
 import { trackCommand } from "../telemetry.js";
 
 export interface CommandContext {
@@ -47,43 +48,45 @@ export interface IssueCreateOptions {
 export async function handleIssueCreate(
   ctx: CommandContext,
   title: string,
-  options: IssueCreateOptions
+  options: IssueCreateOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Generate issue ID and UUID
-    const { id: issueId, uuid: issueUUID } = generateIssueId(ctx.db, ctx.outputDir);
+    const { id: issueId, uuid: issueUUID } = generateIssueId(
+      ctx.db,
+      ctx.outputDir,
+    );
 
-    const issue = createIssue(ctx.db, {
-      id: issueId,
-      uuid: issueUUID,
-      title,
-      content: options.description || "",
-      status: "open",
-      priority: parseInt(options.priority),
-      assignee: options.assignee || undefined,
-      parent_id: options.parent || undefined,
+    const issue = persistMutation(ctx.db, ctx.outputDir, () => {
+      const issue = createIssue(ctx.db, {
+        id: issueId,
+        uuid: issueUUID,
+        title,
+        content: options.description || "",
+        status: "open",
+        priority: parseInt(options.priority),
+        assignee: options.assignee || undefined,
+        parent_id: options.parent || undefined,
+      });
+
+      if (options.tags) {
+        const tags = options.tags.split(",").map((t) => t.trim());
+        setTags(ctx.db, issueId, "issue", tags);
+      }
+
+      return issue;
     });
 
-    if (options.tags) {
-      const tags = options.tags.split(",").map((t) => t.trim());
-      setTags(ctx.db, issueId, "issue", tags);
-    }
-
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Also update the markdown file to keep it in sync
     const issuesDir = path.join(ctx.outputDir, "issues");
     fs.mkdirSync(issuesDir, { recursive: true });
 
-    // Generate filename using unified scheme: {id}_{title_slug}.md
     const fileName = generateUniqueFilename(title, issueId);
     const mdPath = path.join(issuesDir, fileName);
-    await syncJSONLToMarkdown(ctx.db, issueId, 'issue', mdPath);
+    await syncJSONLToMarkdown(ctx.db, issueId, "issue", mdPath);
 
     if (ctx.jsonOutput) {
       console.log(
-        JSON.stringify({ id: issueId, title, status: "open" }, null, 2)
+        JSON.stringify({ id: issueId, title, status: "open" }, null, 2),
       );
     } else {
       console.log(chalk.green("✓ Created issue"), chalk.cyan(issueId));
@@ -93,9 +96,21 @@ export async function handleIssueCreate(
         console.log(chalk.gray(`  Assignee: ${options.assignee}`));
       }
     }
-    await trackCommand(ctx.outputDir, "issue_create", { title }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_create",
+      { title },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "issue_create", { title }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_create",
+      { title },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to create issue"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -113,35 +128,37 @@ export interface IssueListOptions {
 
 export async function handleIssueList(
   ctx: CommandContext,
-  options: IssueListOptions
+  options: IssueListOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Validate status if provided
     if (options.status && !isValidIssueStatus(options.status)) {
+      console.error(chalk.red(`✗ Invalid status filter: ${options.status}`));
       console.error(
-        chalk.red(`✗ Invalid status filter: ${options.status}`)
-      );
-      console.error(
-        chalk.gray(`Valid statuses: ${getValidIssueStatuses().join(", ")}`)
+        chalk.gray(`Valid statuses: ${getValidIssueStatuses().join(", ")}`),
       );
       process.exit(1);
     }
 
-    // Use search if grep is provided, otherwise use list with filters
     const issues = options.grep
       ? searchIssues(ctx.db, options.grep, {
           status: options.status as any,
           assignee: options.assignee,
           priority: options.priority ? parseInt(options.priority) : undefined,
-          archived: options.archived !== undefined ? options.archived === 'true' : false, // Default to excluding archived
+          archived:
+            options.archived !== undefined
+              ? options.archived === "true"
+              : false,
           limit: parseInt(options.limit),
         })
       : listIssues(ctx.db, {
           status: options.status as any,
           assignee: options.assignee,
           priority: options.priority ? parseInt(options.priority) : undefined,
-          archived: options.archived !== undefined ? options.archived === 'true' : false, // Default to excluding archived
+          archived:
+            options.archived !== undefined
+              ? options.archived === "true"
+              : false,
           limit: parseInt(options.limit),
         });
 
@@ -172,15 +189,27 @@ export async function handleIssueList(
           chalk.cyan(issue.id),
           statusColor(`[${issue.status}]`),
           issue.title,
-          assigneeStr
+          assigneeStr,
         );
         console.log(chalk.gray(`  Priority: ${issue.priority}`));
       }
       console.log();
     }
-    await trackCommand(ctx.outputDir, "issue_list", {}, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_list",
+      {},
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "issue_list", {}, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_list",
+      {},
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to list issues"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -189,7 +218,7 @@ export async function handleIssueList(
 
 export async function handleIssueShow(
   ctx: CommandContext,
-  id: string
+  id: string,
 ): Promise<void> {
   const startTime = Date.now();
   try {
@@ -209,8 +238,8 @@ export async function handleIssueShow(
         JSON.stringify(
           { ...issue, relationships: { outgoing, incoming }, tags, feedback },
           null,
-          2
-        )
+          2,
+        ),
       );
     } else {
       console.log();
@@ -252,8 +281,8 @@ export async function handleIssueShow(
         for (const rel of outgoing) {
           console.log(
             `  ${chalk.yellow(rel.relationship_type)} → ${chalk.cyan(
-              rel.to_id
-            )} (${rel.to_type})`
+              rel.to_id,
+            )} (${rel.to_type})`,
           );
         }
       }
@@ -264,8 +293,8 @@ export async function handleIssueShow(
         for (const rel of incoming) {
           console.log(
             `  ${chalk.cyan(rel.from_id)} (${rel.from_type}) → ${chalk.yellow(
-              rel.relationship_type
-            )}`
+              rel.relationship_type,
+            )}`,
           );
         }
       }
@@ -287,14 +316,14 @@ export async function handleIssueShow(
           console.log(
             `  ${chalk.cyan(fb.id)} → ${chalk.cyan(fb.to_id)}`,
             statusColor(`[${fb.dismissed ? "dismissed" : "active"}]`),
-            anchorStatusColor(`[${anchor.anchor_status}]`)
+            anchorStatusColor(`[${anchor.anchor_status}]`),
           );
           console.log(
             chalk.gray(
               `    Type: ${fb.feedback_type} | ${
                 anchor.section_heading || "No section"
-              } (line ${anchor.line_number})`
-            )
+              } (line ${anchor.line_number})`,
+            ),
           );
           const contentPreview =
             fb.content.substring(0, 60) + (fb.content.length > 60 ? "..." : "");
@@ -304,9 +333,21 @@ export async function handleIssueShow(
 
       console.log();
     }
-    await trackCommand(ctx.outputDir, "issue_show", { id }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_show",
+      { id },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "issue_show", { id }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_show",
+      { id },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to show issue"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -326,17 +367,14 @@ export interface IssueUpdateOptions {
 export async function handleIssueUpdate(
   ctx: CommandContext,
   id: string,
-  options: IssueUpdateOptions
+  options: IssueUpdateOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    // Validate status if provided
     if (options.status && !isValidIssueStatus(options.status)) {
+      console.error(chalk.red(`✗ Invalid status: ${options.status}`));
       console.error(
-        chalk.red(`✗ Invalid status: ${options.status}`)
-      );
-      console.error(
-        chalk.gray(`Valid statuses: ${getValidIssueStatuses().join(", ")}`)
+        chalk.gray(`Valid statuses: ${getValidIssueStatuses().join(", ")}`),
       );
       process.exit(1);
     }
@@ -349,20 +387,18 @@ export async function handleIssueUpdate(
     if (options.description) updates.content = options.description;
     if (options.parent) updates.parent_id = options.parent;
     if (options.archived !== undefined) {
-      updates.archived = options.archived === 'true';
+      updates.archived = options.archived === "true";
     }
 
-    const issue = updateIssue(ctx.db, id, updates);
+    const issue = persistMutation(ctx.db, ctx.outputDir, () =>
+      updateIssue(ctx.db, id, updates),
+    );
 
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Also update the markdown file to keep it in sync
     const issuesDir = path.join(ctx.outputDir, "issues");
     fs.mkdirSync(issuesDir, { recursive: true });
 
-    // Find existing file, rename if title changed, or generate new filename
     const mdPath = syncFileWithRename(id, issuesDir, issue.title);
-    await syncJSONLToMarkdown(ctx.db, id, 'issue', mdPath);
+    await syncJSONLToMarkdown(ctx.db, id, "issue", mdPath);
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(issue, null, 2));
@@ -372,9 +408,21 @@ export async function handleIssueUpdate(
         console.log(chalk.gray(`  ${key}: ${updates[key]}`));
       });
     }
-    await trackCommand(ctx.outputDir, "issue_update", { id, status: options.status, archived: options.archived === 'true' }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_update",
+      { id, status: options.status, archived: options.archived === "true" },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "issue_update", { id, status: options.status, archived: options.archived === 'true' }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_update",
+      { id, status: options.status, archived: options.archived === "true" },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to update issue"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -388,14 +436,14 @@ export interface IssueCloseOptions {
 export async function handleIssueClose(
   ctx: CommandContext,
   ids: string[],
-  options: IssueCloseOptions
+  options: IssueCloseOptions,
 ): Promise<void> {
   const startTime = Date.now();
   try {
     const results = [];
     for (const id of ids) {
       try {
-        closeIssue(ctx.db, id);
+        persistMutation(ctx.db, ctx.outputDir, () => closeIssue(ctx.db, id));
         results.push({ id, success: true });
         if (!ctx.jsonOutput) {
           console.log(chalk.green("✓ Closed issue"), chalk.cyan(id));
@@ -411,32 +459,44 @@ export async function handleIssueClose(
             chalk.red("✗ Failed to close"),
             chalk.cyan(id),
             ":",
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
           );
         }
       }
     }
 
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
-
-    // Also update the markdown files to keep them in sync
     const issuesDir = path.join(ctx.outputDir, "issues");
     fs.mkdirSync(issuesDir, { recursive: true });
     for (const result of results) {
       if (result.success) {
-        // Find existing file, rename if title changed, or generate new filename
         const issue = getIssue(ctx.db, result.id);
-        const mdPath = syncFileWithRename(result.id, issuesDir, issue?.title || result.id);
-        await syncJSONLToMarkdown(ctx.db, result.id, 'issue', mdPath);
+        const mdPath = syncFileWithRename(
+          result.id,
+          issuesDir,
+          issue?.title || result.id,
+        );
+        await syncJSONLToMarkdown(ctx.db, result.id, "issue", mdPath);
       }
     }
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(results, null, 2));
     }
-    await trackCommand(ctx.outputDir, "issue_close", { id: ids.join(",") }, true, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_close",
+      { id: ids.join(",") },
+      true,
+      Date.now() - startTime,
+    );
   } catch (error) {
-    await trackCommand(ctx.outputDir, "issue_close", { id: ids.join(",") }, false, Date.now() - startTime);
+    await trackCommand(
+      ctx.outputDir,
+      "issue_close",
+      { id: ids.join(",") },
+      false,
+      Date.now() - startTime,
+    );
     console.error(chalk.red("✗ Failed to close issues"));
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -450,7 +510,7 @@ export interface IssueDeleteOptions {
 export async function handleIssueDelete(
   ctx: CommandContext,
   ids: string[],
-  options: IssueDeleteOptions
+  options: IssueDeleteOptions,
 ): Promise<void> {
   try {
     const results = [];
@@ -467,15 +527,16 @@ export async function handleIssueDelete(
         }
 
         if (options.hard) {
-          // Hard delete - permanently remove from database
           const { deleteIssue } = await import("../operations/issues.js");
-          const deleted = deleteIssue(ctx.db, id);
+          const deleted = persistMutation(ctx.db, ctx.outputDir, () =>
+            deleteIssue(ctx.db, id),
+          );
           if (deleted) {
             results.push({ id, success: true, action: "hard_delete" });
             if (!ctx.jsonOutput) {
               console.log(
                 chalk.green("✓ Permanently deleted issue"),
-                chalk.cyan(id)
+                chalk.cyan(id),
               );
             }
           } else {
@@ -483,13 +544,12 @@ export async function handleIssueDelete(
             if (!ctx.jsonOutput) {
               console.error(
                 chalk.red("✗ Failed to delete issue"),
-                chalk.cyan(id)
+                chalk.cyan(id),
               );
             }
           }
         } else {
-          // Soft delete - close the issue
-          closeIssue(ctx.db, id);
+          persistMutation(ctx.db, ctx.outputDir, () => closeIssue(ctx.db, id));
           results.push({
             id,
             success: true,
@@ -508,14 +568,11 @@ export async function handleIssueDelete(
             chalk.red("✗ Failed to process"),
             chalk.cyan(id),
             ":",
-            message
+            message,
           );
         }
       }
     }
-
-    // Export to JSONL after all deletions
-    await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(results, null, 2));

@@ -8,7 +8,6 @@ import express from "express";
 import { createRelationshipsRouter } from "../../src/routes/relationships.js";
 import { createIssuesRouter } from "../../src/routes/issues.js";
 import { createSpecsRouter } from "../../src/routes/specs.js";
-import { cleanupExport } from "../../src/services/export.js";
 import { ProjectManager } from "../../src/services/project-manager.js";
 import { ProjectRegistry } from "../../src/services/project-registry.js";
 import { requireProject } from "../../src/middleware/project-context.js";
@@ -96,7 +95,6 @@ describe("Relationships API", () => {
 
   afterAll(async () => {
     // Clean up export debouncer first
-    cleanupExport();
     // Shutdown project manager
     await projectManager.shutdown();
     // Clean up test directory

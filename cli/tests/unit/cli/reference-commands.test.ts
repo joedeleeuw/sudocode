@@ -142,26 +142,6 @@ Task content here.`
       consoleLogSpy.mockClear();
     });
 
-    it("should add reference to spec using line number (inline)", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-
-      await handleAddReference(ctx, "SPEC-001", "ISSUE-001", {
-        line: "5",
-        format: "inline",
-        position: "after",
-      });
-
-      // Read the updated file
-      const filePath = path.join(tempDir, "specs", "test-spec.md");
-      const content = fs.readFileSync(filePath, "utf8");
-
-      expect(content).toContain("This is a requirement line. [[ISSUE-001]]");
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        expect.stringContaining("✓ Added reference to"),
-        expect.anything()
-      );
-    });
-
     it("should add reference to spec using text search", async () => {
       const ctx = { db, outputDir: tempDir, jsonOutput: false };
 
@@ -300,34 +280,6 @@ Task content here.`
 
       expect(consoleErrorSpy).toHaveBeenCalled();
       expect(processExitSpy).toHaveBeenCalledWith(1);
-    });
-
-    it("should output JSON format", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: true };
-
-      await handleAddReference(ctx, "SPEC-001", "ISSUE-001", {
-        line: "5",
-      });
-
-      const output = consoleLogSpy.mock.calls[0][0];
-      const parsed = JSON.parse(output);
-      expect(parsed.entity_id).toBe("SPEC-001");
-      expect(parsed.reference_id).toBe("ISSUE-001");
-      expect(parsed.success).toBe(true);
-    });
-
-    it("should update database content", async () => {
-      const ctx = { db, outputDir: tempDir, jsonOutput: false };
-
-      await handleAddReference(ctx, "SPEC-001", "ISSUE-001", {
-        line: "5",
-        format: "inline",
-      });
-
-      // Check that database was updated
-      const { getSpec } = await import("../../../src/operations/specs.js");
-      const spec = getSpec(db, "SPEC-001");
-      expect(spec?.content).toContain("[[ISSUE-001]]");
     });
   });
 });

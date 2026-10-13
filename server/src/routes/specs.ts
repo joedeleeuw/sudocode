@@ -1,3 +1,4 @@
+import { persistMutation } from "@sudocode-ai/cli/dist/tracker-mutation.js";
 /**
  * Specs API routes (mapped to /api/specs)
  *
@@ -17,9 +18,6 @@ import { generateUniqueFilename } from "@sudocode-ai/cli/dist/filename-generator
 import { getSpecFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastSpecUpdate } from "../services/websocket.js";
 import {
-  executeExportNow,
-  persistMutation,
-  reconcileJSONLBeforeMutation,
   syncEntityToMarkdown,
 } from "../services/export.js";
 import { refreshSpec } from "../services/external-refresh-service.js";
@@ -34,13 +32,11 @@ export function createSpecsRouter(): Router {
    */
   router.get("/", (req: Request, res: Response) => {
     try {
-      // Parse query parameters for filtering
       const options: any = {};
 
       if (req.query.priority) {
         options.priority = parseInt(req.query.priority as string, 10);
       }
-      // Default to excluding archived unless explicitly specified
       options.archived =
         req.query.archived !== undefined
           ? req.query.archived === "true"
@@ -108,7 +104,6 @@ export function createSpecsRouter(): Router {
     try {
       const { title, content, priority, parent_id } = req.body;
 
-      // Validate required fields
       if (!title || typeof title !== "string") {
         res.status(400).json({
           success: false,
@@ -127,15 +122,11 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Generate new spec ID
       const outputDir = req.project!.sudocodeDir;
       const { id, uuid } = generateSpecId(req.project!.db, outputDir);
 
-      // Generate file path for the spec (relative path)
       const file_path = `specs/${generateUniqueFilename(title, id)}`;
 
-      // Create spec and persist it to the tracked JSONL atomically: the
-      // request fails (and nothing stays in the database) when the export does
       const spec = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -151,7 +142,6 @@ export function createSpecsRouter(): Router {
           })
       );
 
-      // Sync this specific spec to its markdown file (don't wait for it)
       syncEntityToMarkdown(
         req.project!.db,
         spec.id,
@@ -161,7 +151,6 @@ export function createSpecsRouter(): Router {
         console.error(`Failed to sync spec ${spec.id} to markdown:`, error);
       });
 
-      // Broadcast spec creation to WebSocket clients
       broadcastSpecUpdate(req.project!.id, spec.id, "created", spec);
 
       res.status(201).json({
@@ -187,7 +176,6 @@ export function createSpecsRouter(): Router {
       const { id } = req.params;
       const { title, content, priority, parent_id, archived } = req.body;
 
-      // Validate that at least one field is provided
       if (
         title === undefined &&
         content === undefined &&
@@ -203,7 +191,6 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Validate title length if provided
       if (
         title !== undefined &&
         typeof title === "string" &&
@@ -217,7 +204,6 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Build update input
       const updateInput: any = {};
       if (title !== undefined) updateInput.title = title;
       if (content !== undefined) updateInput.content = content;
@@ -228,14 +214,12 @@ export function createSpecsRouter(): Router {
         updateInput.archived_at = archived ? new Date().toISOString() : null;
       }
 
-      // Update spec and persist it to the tracked JSONL atomically
       const spec = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
         () => updateExistingSpec(req.project!.db, id, updateInput)
       );
 
-      // Sync to external integrations (JSONL is already up to date)
       if (req.project!.integrationSyncService) {
         req
           .project!.integrationSyncService.syncEntity(spec.id)
@@ -247,7 +231,6 @@ export function createSpecsRouter(): Router {
           });
       }
 
-      // Sync this specific spec to its markdown file (don't wait for it)
       syncEntityToMarkdown(
         req.project!.db,
         spec.id,
@@ -257,7 +240,6 @@ export function createSpecsRouter(): Router {
         console.error(`Failed to sync spec ${spec.id} to markdown:`, error);
       });
 
-      // Broadcast spec update to WebSocket clients
       broadcastSpecUpdate(req.project!.id, spec.id, "updated", spec);
 
       res.json({
@@ -267,7 +249,6 @@ export function createSpecsRouter(): Router {
     } catch (error) {
       console.error("Error updating spec:", error);
 
-      // Handle "not found" errors
       if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({
           success: false,
@@ -293,7 +274,6 @@ export function createSpecsRouter(): Router {
     try {
       const { id } = req.params;
 
-      // Check if spec exists first
       const existingSpec = getSpecById(req.project!.db, id);
       if (!existingSpec) {
         res.status(404).json({
@@ -304,16 +284,13 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Save file_path before deletion
       const markdownPath = existingSpec.file_path
         ? path.join(req.project!.sudocodeDir, existingSpec.file_path)
         : null;
 
-      // Save external links before deletion (for outbound sync)
       const specFromJsonl = getSpecFromJsonl(req.project!.sudocodeDir, id);
       const externalLinks = specFromJsonl?.external_links || [];
 
-      // Delete spec and persist the deletion to the tracked JSONL atomically
       const deleted = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -321,7 +298,6 @@ export function createSpecsRouter(): Router {
       );
 
       if (deleted) {
-        // Delete markdown file if it exists
         if (markdownPath && fs.existsSync(markdownPath)) {
           try {
             fs.unlinkSync(markdownPath);
@@ -333,7 +309,6 @@ export function createSpecsRouter(): Router {
           }
         }
 
-        // Propagate deletion to external systems (if any links exist)
         if (externalLinks.length > 0 && req.project!.integrationSyncService) {
           req
             .project!.integrationSyncService.handleEntityDeleted(
@@ -348,7 +323,6 @@ export function createSpecsRouter(): Router {
             });
         }
 
-        // Broadcast spec deletion to WebSocket clients
         broadcastSpecUpdate(req.project!.id, id, "deleted", { id });
 
         res.json({
@@ -393,7 +367,6 @@ export function createSpecsRouter(): Router {
       const { id } = req.params;
       const force = req.query.force === "true";
 
-      // Check if spec exists
       const existingSpec = getSpecById(req.project!.db, id);
       if (!existingSpec) {
         res.status(404).json({
@@ -404,8 +377,7 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Reconcile the tracked JSONL before mutating, then refresh from external source
-      await reconcileJSONLBeforeMutation(req.project!.db, req.project!.sudocodeDir);
+
       const result = await refreshSpec(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -414,7 +386,6 @@ export function createSpecsRouter(): Router {
         force
       );
 
-      // Handle stale links (external entity deleted)
       if (result.stale) {
         res.status(200).json({
           success: true,
@@ -428,7 +399,6 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Handle errors
       if (result.error && !result.hasLocalChanges) {
         res.status(400).json({
           success: false,
@@ -438,7 +408,6 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Handle local changes preview (not forced)
       if (result.hasLocalChanges && !result.updated) {
         res.status(200).json({
           success: true,
@@ -451,12 +420,9 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // Handle successful update
       if (result.updated && result.entity) {
-        // Persist to the tracked JSONL; a failed export fails the request
-        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
 
-        // Sync to markdown file
+
         syncEntityToMarkdown(
           req.project!.db,
           id,
@@ -466,7 +432,6 @@ export function createSpecsRouter(): Router {
           console.error(`Failed to sync spec ${id} to markdown:`, error);
         });
 
-        // Broadcast spec update to WebSocket clients
         broadcastSpecUpdate(req.project!.id, id, "updated", result.entity);
 
         res.status(200).json({
@@ -480,7 +445,6 @@ export function createSpecsRouter(): Router {
         return;
       }
 
-      // No changes needed
       res.status(200).json({
         success: true,
         data: {

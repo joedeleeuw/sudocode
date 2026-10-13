@@ -1,3 +1,4 @@
+import { persistMutation } from "@sudocode-ai/cli/dist/tracker-mutation.js";
 /**
  * Issues API routes (mapped to /api/issues)
  *
@@ -15,7 +16,7 @@ import {
 import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { getIssueFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastIssueUpdate } from "../services/websocket.js";
-import { executeExportNow, persistMutation, reconcileJSONLBeforeMutation, syncEntityToMarkdown } from "../services/export.js";
+import { syncEntityToMarkdown } from "../services/export.js";
 import { refreshIssue } from "../services/external-refresh-service.js";
 import * as path from "path";
 import { findExistingEntityFile } from "@sudocode-ai/cli/dist/filename-generator.js";
@@ -29,7 +30,6 @@ export function createIssuesRouter(): Router {
    */
   router.get("/", (req: Request, res: Response) => {
     try {
-      // Parse query parameters for filtering
       const options: any = {};
 
       if (req.query.status) {
@@ -41,7 +41,6 @@ export function createIssuesRouter(): Router {
       if (req.query.assignee) {
         options.assignee = req.query.assignee as string;
       }
-      // Default to excluding archived unless explicitly specified
       options.archived =
         req.query.archived !== undefined
           ? req.query.archived === "true"
@@ -110,7 +109,6 @@ export function createIssuesRouter(): Router {
       const { title, content, status, priority, assignee, parent_id } =
         req.body;
 
-      // Validate required fields
       if (!title || typeof title !== "string") {
         res.status(400).json({
           success: false,
@@ -129,12 +127,9 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Generate new issue ID
       const outputDir = req.project!.sudocodeDir;
       const { id, uuid } = generateIssueId(req.project!.db, outputDir);
 
-      // Create issue and persist it to the tracked JSONL atomically: the
-      // request fails (and nothing stays in the database) when the export does
       const issue = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -151,12 +146,10 @@ export function createIssuesRouter(): Router {
           })
       );
 
-      // Sync this specific issue to its markdown file (don't wait for it)
       syncEntityToMarkdown(req.project!.db, issue.id, "issue", req.project!.sudocodeDir).catch((error) => {
         console.error(`Failed to sync issue ${issue.id} to markdown:`, error);
       });
 
-      // Broadcast issue creation to WebSocket clients
       broadcastIssueUpdate(req.project!.id, issue.id, "created", issue);
 
       res.status(201).json({
@@ -190,7 +183,6 @@ export function createIssuesRouter(): Router {
         archived,
       } = req.body;
 
-      // Validate that at least one field is provided
       if (
         title === undefined &&
         content === undefined &&
@@ -208,7 +200,6 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Validate title length if provided
       if (
         title !== undefined &&
         typeof title === "string" &&
@@ -222,7 +213,6 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Build update input
       const updateInput: any = {};
       if (title !== undefined) updateInput.title = title;
       if (content !== undefined) updateInput.content = content;
@@ -235,26 +225,22 @@ export function createIssuesRouter(): Router {
         updateInput.archived_at = archived ? new Date().toISOString() : null;
       }
 
-      // Update issue and persist it to the tracked JSONL atomically
       const issue = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
         () => updateExistingIssue(req.project!.db, id, updateInput)
       );
 
-      // Sync to external integrations (JSONL is already up to date)
       if (req.project!.integrationSyncService) {
         req.project!.integrationSyncService.syncEntity(issue.id).catch((error) => {
           console.error(`Failed to sync issue ${issue.id} to external integrations:`, error);
         });
       }
 
-      // Sync this specific issue to its markdown file (don't wait for it)
       syncEntityToMarkdown(req.project!.db, issue.id, "issue", req.project!.sudocodeDir).catch((error) => {
         console.error(`Failed to sync issue ${issue.id} to markdown:`, error);
       });
 
-      // Broadcast issue update to WebSocket clients
       broadcastIssueUpdate(req.project!.id, issue.id, "updated", issue);
 
       res.json({
@@ -264,7 +250,6 @@ export function createIssuesRouter(): Router {
     } catch (error) {
       console.error("Error updating issue:", error);
 
-      // Handle "not found" errors
       if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({
           success: false,
@@ -290,7 +275,6 @@ export function createIssuesRouter(): Router {
     try {
       const { id } = req.params;
 
-      // Check if issue exists first
       const existingIssue = getIssueById(req.project!.db, id);
       if (!existingIssue) {
         res.status(404).json({
@@ -301,15 +285,12 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Read external_links from JSONL BEFORE deleting (for outbound propagation)
       const jsonlIssue = getIssueFromJsonl(req.project!.sudocodeDir, id);
       const externalLinks = jsonlIssue?.external_links || [];
 
-      // Find markdown file before deletion (entity still in DB)
       const issuesDir = path.join(req.project!.sudocodeDir, "issues");
       const markdownPath = findExistingEntityFile(id, issuesDir);
 
-      // Delete issue and persist the deletion to the tracked JSONL atomically
       const deleted = await persistMutation(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -317,7 +298,6 @@ export function createIssuesRouter(): Router {
       );
 
       if (deleted) {
-        // Delete markdown file if it exists
         if (markdownPath && fs.existsSync(markdownPath)) {
           try {
             fs.unlinkSync(markdownPath);
@@ -326,14 +306,12 @@ export function createIssuesRouter(): Router {
           }
         }
 
-        // Propagate deletion to external systems (if any links exist)
         if (externalLinks.length > 0 && req.project!.integrationSyncService) {
           req.project!.integrationSyncService.handleEntityDeleted(id, externalLinks).catch((error) => {
             console.error(`[issues] Failed to propagate deletion to external systems:`, error);
           });
         }
 
-        // Broadcast issue deletion to WebSocket clients
         broadcastIssueUpdate(req.project!.id, id, "deleted", { id });
 
         res.json({
@@ -378,7 +356,6 @@ export function createIssuesRouter(): Router {
       const { id } = req.params;
       const force = req.query.force === "true";
 
-      // Check if issue exists
       const existingIssue = getIssueById(req.project!.db, id);
       if (!existingIssue) {
         res.status(404).json({
@@ -389,8 +366,7 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Reconcile the tracked JSONL before mutating, then refresh from external source
-      await reconcileJSONLBeforeMutation(req.project!.db, req.project!.sudocodeDir);
+
       const result = await refreshIssue(
         req.project!.db,
         req.project!.sudocodeDir,
@@ -399,7 +375,6 @@ export function createIssuesRouter(): Router {
         force
       );
 
-      // Handle stale links (external entity deleted)
       if (result.stale) {
         res.status(200).json({
           success: true,
@@ -413,7 +388,6 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Handle errors
       if (result.error && !result.hasLocalChanges) {
         res.status(400).json({
           success: false,
@@ -423,7 +397,6 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Handle local changes preview (not forced)
       if (result.hasLocalChanges && !result.updated) {
         res.status(200).json({
           success: true,
@@ -436,12 +409,9 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // Handle successful update
       if (result.updated && result.entity) {
-        // Persist to the tracked JSONL; a failed export fails the request
-        await executeExportNow(req.project!.db, req.project!.sudocodeDir);
 
-        // Sync to markdown file
+
         syncEntityToMarkdown(
           req.project!.db,
           id,
@@ -451,7 +421,6 @@ export function createIssuesRouter(): Router {
           console.error(`Failed to sync issue ${id} to markdown:`, error);
         });
 
-        // Broadcast issue update to WebSocket clients
         broadcastIssueUpdate(req.project!.id, id, "updated", result.entity);
 
         res.status(200).json({
@@ -465,7 +434,6 @@ export function createIssuesRouter(): Router {
         return;
       }
 
-      // No changes needed
       res.status(200).json({
         success: true,
         data: {

@@ -681,7 +681,7 @@ Stores ID counters and configuration:
 
 - File changes: 2-second debounce
 - CLI exports: 5-second debounce
-- Server API writes: no debounce (each write is exported atomically within the request; a failed export fails the request and rolls the write back)
+- Server API writes: no debounce (each request waits for journaled publication of both JSONL files and the SQLite commit; failures restore the previous files and cache, and interrupted publication is recovered before reconciliation)
 - Batch operations: No debounce (immediate export)
 
 ---

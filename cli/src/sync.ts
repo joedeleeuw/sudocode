@@ -18,11 +18,14 @@ import {
   updateSpec,
 } from "./operations/specs.js";
 import { getIssue, createIssue, updateIssue } from "./operations/issues.js";
-import { addRelationship } from "./operations/relationships.js";
+import {
+  addRelationship,
+  getOutgoingRelationships,
+} from "./operations/relationships.js";
 import { getTags, setTags } from "./operations/tags.js";
 import { listFeedback, updateFeedback } from "./operations/feedback.js";
 import { relocateFeedbackAnchor } from "./operations/feedback-anchors.js";
-import { exportToJSONL } from "./export.js";
+import { persistMutation } from "./tracker-mutation.js";
 import { generateSpecId, generateIssueId } from "./id-generator.js";
 import type { Spec, Issue, IssueStatus } from "@sudocode-ai/types";
 import { isValidIssueStatus } from "./validation.js";
@@ -66,7 +69,7 @@ export interface SyncOptions {
  * These fields are only for database tracking, not for the markdown files
  */
 function cleanFrontmatterForMarkdown(
-  data: Record<string, any>
+  data: Record<string, any>,
 ): Record<string, any> {
   const { file_path, entity_type, ...clean } = data;
   return clean;
@@ -81,12 +84,11 @@ function initializeFrontmatter(
   entityType: "spec" | "issue",
   mdPath: string,
   outputDir: string,
-  _user: string
+  _user: string,
 ): Record<string, any> {
   const now = new Date().toISOString();
   const initialized = { ...data };
 
-  // Generate ID and UUID if missing
   if (!initialized.id) {
     const generated =
       entityType === "spec"
@@ -96,7 +98,6 @@ function initializeFrontmatter(
     initialized.uuid = generated.uuid;
   }
 
-  // Extract title from content if missing
   if (!initialized.title) {
     const content = fs.readFileSync(mdPath, "utf8");
     const titleMatch = content.match(/^#\s+(.+)$/m);
@@ -105,7 +106,6 @@ function initializeFrontmatter(
       : path.basename(mdPath, ".md");
   }
 
-  // Set timestamps
   if (!initialized.created_at) {
     initialized.created_at = now;
   }
@@ -113,12 +113,10 @@ function initializeFrontmatter(
     initialized.updated_at = now;
   }
 
-  // Set type-specific defaults
   if (entityType === "spec") {
     if (!initialized.priority && initialized.priority !== 0)
       initialized.priority = 2;
   } else {
-    // issue
     if (!initialized.status) initialized.status = "open";
     if (!initialized.priority && initialized.priority !== 0)
       initialized.priority = 2;
@@ -134,7 +132,7 @@ function initializeFrontmatter(
 export async function syncMarkdownToJSONL(
   db: Database.Database,
   mdPath: string,
-  options: SyncOptions = {}
+  options: SyncOptions = {},
 ): Promise<MarkdownSyncResult> {
   const {
     outputDir = ".sudocode",
@@ -145,89 +143,69 @@ export async function syncMarkdownToJSONL(
   } = options;
 
   try {
-    // Parse markdown file with database validation for cross-references
     const parsed = parseMarkdownFile(mdPath, db, outputDir);
     let { data, content, references } = parsed;
 
-    // Determine entity type from frontmatter or file path
     const entityType = determineEntityType(data, mdPath);
     let entityId = data.id as string | undefined;
     const frontmatterId = entityId; // Keep track of ID from frontmatter for validation
 
-    // Calculate relative file path from outputDir
     const relPath = path.relative(outputDir, mdPath);
     const filePath = relPath.startsWith("..")
       ? path.relative(process.cwd(), mdPath)
       : relPath;
 
-    // For specs, determine which spec this file corresponds to
-    // Support two scenarios: rename (ID stays, path changes) and path-based lookup (no ID)
     let existingByPath: any = null;
     let existingById: any = null;
     if (entityType === "spec") {
-      // Always set the calculated file path in data (for create/update)
       data.file_path = filePath;
 
-      // Check if a spec exists with this ID (from frontmatter)
       if (frontmatterId) {
         existingById = getSpec(db, frontmatterId);
       }
 
-      // Check if a spec exists at this file path
       existingByPath = getSpecByFilePath(db, filePath);
 
-      // Scenario 1: Spec exists with this ID
       if (existingById) {
         entityId = existingById.id;
 
-        // Check if file was renamed (ID exists but different path)
         if (existingById.file_path !== filePath) {
           console.log(
-            `[sync] File renamed: ${existingById.file_path} → ${filePath}`
+            `[sync] File renamed: ${existingById.file_path} → ${filePath}`,
           );
 
-          // Check if another spec already exists at new path (conflict)
           if (existingByPath && existingByPath.id !== existingById.id) {
             console.warn(
-              `[sync] Warning: File path conflict! Spec ${existingByPath.id} already exists at ${filePath}. Keeping ${existingById.id} and updating path.`
+              `[sync] Warning: File path conflict! Spec ${existingByPath.id} already exists at ${filePath}. Keeping ${existingById.id} and updating path.`,
             );
           }
         }
-      }
-      // Scenario 2: No ID in frontmatter, but spec exists at this path
-      else if (existingByPath) {
+      } else if (existingByPath) {
         entityId = existingByPath.id;
         data.id = entityId;
-      }
-      // Scenario 3: ID in frontmatter differs from spec at this path (user changed ID)
-      else if (frontmatterId && existingByPath) {
-        // This shouldn't happen due to earlier checks, but handle it
+      } else if (frontmatterId && existingByPath) {
         const correctId = existingByPath.id;
         console.warn(
-          `[sync] Warning: ID in frontmatter (${frontmatterId}) differs from existing spec ID (${correctId}) for ${filePath}. Using existing ID.`
+          `[sync] Warning: ID in frontmatter (${frontmatterId}) differs from existing spec ID (${correctId}) for ${filePath}. Using existing ID.`,
         );
         entityId = correctId;
         data.id = entityId;
       }
     }
 
-    // Handle missing frontmatter
     if (!entityId) {
       if (autoInitialize) {
-        // Auto-initialize missing fields
         data = initializeFrontmatter(
           db,
           data,
           entityType,
           mdPath,
           outputDir,
-          user
+          user,
         );
         entityId = data.id as string;
 
-        // Write back frontmatter if requested
         if (writeBackFrontmatter) {
-          // Filter out internal fields that shouldn't be in markdown frontmatter
           const cleanData = cleanFrontmatterForMarkdown(data);
           updateFrontmatterFile(mdPath, cleanData);
         }
@@ -242,47 +220,41 @@ export async function syncMarkdownToJSONL(
       }
     }
 
-    // Check if entity exists by ID
     const existing =
       entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
 
     const isNew = !existing;
 
-    // Get file modification time to use as updated_at timestamp
-    // This ensures database timestamp matches when the file was actually modified
     const fileStat = fs.statSync(mdPath);
     const fileModTime = new Date(fileStat.mtimeMs).toISOString();
 
-    if (entityType === "spec") {
-      await syncSpec(
-        db,
-        entityId,
-        data,
-        content,
-        references,
-        isNew,
-        user,
-        fileModTime
-      );
-    } else {
-      await syncIssue(
-        db,
-        entityId,
-        data,
-        content,
-        references,
-        isNew,
-        user,
-        fileModTime
-      );
-    }
-
-    // Auto-export to JSONL if enabled
-    if (autoExport) {
-      await exportToJSONL(db, {
-        outputDir,
-      });
-    }
+    const syncEntity = () => {
+      if (entityType === "spec") {
+        syncSpec(
+          db,
+          entityId,
+          data,
+          content,
+          references,
+          isNew,
+          user,
+          fileModTime,
+        );
+      } else {
+        syncIssue(
+          db,
+          entityId,
+          data,
+          content,
+          references,
+          isNew,
+          user,
+          fileModTime,
+        );
+      }
+    };
+    if (autoExport) persistMutation(db, outputDir, syncEntity);
+    else db.transaction(syncEntity)();
 
     return {
       success: true,
@@ -309,10 +281,9 @@ export async function syncJSONLToMarkdown(
   db: Database.Database,
   entityId: string,
   entityType: "spec" | "issue",
-  mdPath: string
+  mdPath: string,
 ): Promise<MarkdownSyncResult> {
   try {
-    // Get entity from database
     const entity =
       entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
 
@@ -326,27 +297,21 @@ export async function syncJSONLToMarkdown(
       };
     }
 
-    // Get relationships and tags
     const { getOutgoingRelationships } = await import(
       "./operations/relationships.js"
     );
     const relationships = getOutgoingRelationships(db, entityId, entityType);
     const tags = getTags(db, entityId, entityType);
 
-    // Build frontmatter
     const frontmatter = entityToFrontmatter(
       entity,
       entityType,
       relationships,
-      tags
+      tags,
     );
 
-    // Check if file exists (for action reporting)
     const fileExists = fs.existsSync(mdPath);
 
-    // Write full content (frontmatter + body) from database
-    // When this function is called, sync direction has already determined
-    // that database is the source of truth, so we write everything
     const content = entity.content || "";
     writeMarkdownFile(mdPath, frontmatter, content);
 
@@ -372,9 +337,8 @@ export async function syncJSONLToMarkdown(
  */
 function determineEntityType(
   frontmatter: Record<string, any>,
-  filePath: string
+  filePath: string,
 ): "spec" | "issue" {
-  // Check frontmatter type field
   if (frontmatter.entity_type === "issue") {
     return "issue";
   }
@@ -382,7 +346,6 @@ function determineEntityType(
     return "spec";
   }
 
-  // Check file path
   if (filePath.includes("/issues/") || filePath.includes("/issue-")) {
     return "issue";
   }
@@ -390,14 +353,13 @@ function determineEntityType(
     return "spec";
   }
 
-  // Default to spec
   return "spec";
 }
 
 /**
  * Sync spec data to database
  */
-async function syncSpec(
+function syncSpec(
   db: Database.Database,
   id: string,
   frontmatter: Record<string, any>,
@@ -405,9 +367,8 @@ async function syncSpec(
   references: CrossReference[],
   isNew: boolean,
   user: string,
-  fileModTime?: string
-): Promise<void> {
-  // Get old content before updating (for anchor relocation)
+  fileModTime?: string,
+) {
   const oldSpec = isNew ? null : getSpec(db, id);
   const oldContent = oldSpec?.content || "";
 
@@ -426,7 +387,6 @@ async function syncSpec(
       updated_at: fileModTime,
     } as any);
   } else {
-    // Check if content has actually changed
     const contentChanged =
       oldSpec?.title !== specData.title ||
       oldSpec?.content !== specData.content ||
@@ -434,38 +394,31 @@ async function syncSpec(
       oldSpec?.parent_id !== specData.parent_id ||
       oldSpec?.file_path !== specData.file_path;
 
-    // Only update timestamp if content actually changed
-    // Note: external_links is handled separately via JSONL import, not markdown sync
     updateSpec(db, id, {
       ...specData,
       ...(contentChanged && fileModTime ? { updated_at: fileModTime } : {}),
     } as any);
 
-    // Relocate feedback anchors if content changed
     if (oldContent !== content) {
       const feedbackList = listFeedback(db, { to_id: id });
 
       if (feedbackList.length > 0) {
-        // Relocate each feedback anchor
         for (const feedback of feedbackList) {
           const oldAnchor =
             typeof feedback.anchor === "string"
               ? JSON.parse(feedback.anchor)
               : feedback.anchor;
 
-          // Skip feedback without anchors - they should be preserved unchanged
           if (!oldAnchor) {
             continue;
           }
 
-          // Relocate the anchor
           const newAnchor = relocateFeedbackAnchor(
             oldContent,
             content,
-            oldAnchor
+            oldAnchor,
           );
 
-          // Update feedback with new anchor (newAnchor is never null here since oldAnchor was checked)
           if (newAnchor) {
             updateFeedback(db, feedback.id, {
               anchor: newAnchor,
@@ -476,26 +429,24 @@ async function syncSpec(
     }
   }
 
-  // Sync tags
   if (frontmatter.tags && Array.isArray(frontmatter.tags)) {
     setTags(db, id, "spec", frontmatter.tags);
   }
 
-  // Sync relationships from cross-references
-  await syncRelationships(
+  syncRelationships(
     db,
     id,
     "spec",
     references,
     frontmatter.relationships,
-    user
+    user,
   );
 }
 
 /**
  * Sync issue data to database
  */
-async function syncIssue(
+function syncIssue(
   db: Database.Database,
   id: string,
   frontmatter: Record<string, any>,
@@ -503,18 +454,17 @@ async function syncIssue(
   references: CrossReference[],
   isNew: boolean,
   user: string,
-  fileModTime?: string
-): Promise<void> {
+  fileModTime?: string,
+) {
   const oldIssue = isNew ? null : getIssue(db, id);
 
-  // Validate and sanitize status from frontmatter
   let status: IssueStatus = "open"; // default
   if (frontmatter.status) {
     if (isValidIssueStatus(frontmatter.status)) {
       status = frontmatter.status as IssueStatus;
     } else {
       console.warn(
-        `Warning: Invalid status "${frontmatter.status}" in ${id}, defaulting to "open"`
+        `Warning: Invalid status "${frontmatter.status}" in ${id}, defaulting to "open"`,
       );
     }
   }
@@ -535,7 +485,6 @@ async function syncIssue(
       updated_at: fileModTime,
     } as any);
   } else {
-    // Check if content has actually changed
     const contentChanged =
       oldIssue?.title !== issueData.title ||
       oldIssue?.content !== issueData.content ||
@@ -544,27 +493,23 @@ async function syncIssue(
       oldIssue?.assignee !== issueData.assignee ||
       oldIssue?.parent_id !== issueData.parent_id;
 
-    // Only update timestamp if content actually changed
-    // Note: external_links is handled separately via JSONL import, not markdown sync
     updateIssue(db, id, {
       ...issueData,
       ...(contentChanged && fileModTime ? { updated_at: fileModTime } : {}),
     } as any);
   }
 
-  // Sync tags
   if (frontmatter.tags && Array.isArray(frontmatter.tags)) {
     setTags(db, id, "issue", frontmatter.tags);
   }
 
-  // Sync relationships from cross-references
-  await syncRelationships(
+  syncRelationships(
     db,
     id,
     "issue",
     references,
     frontmatter.relationships,
-    user
+    user,
   );
 }
 
@@ -572,33 +517,25 @@ async function syncIssue(
  * Sync relationships from cross-references and frontmatter
  * Preserves existing relationships not in frontmatter
  */
-async function syncRelationships(
+function syncRelationships(
   db: Database.Database,
   entityId: string,
   entityType: "spec" | "issue",
   references: CrossReference[],
   frontmatterRels?: Array<{
-    // Support both formats:
-    // 1. DB format from entityToFrontmatter: { from_id, from_type, to_id, to_type, relationship_type }
-    // 2. Simplified format: { target_id, target_type, relationship_type }
     target_id?: string;
     target_type?: string;
     to_id?: string;
     to_type?: string;
     relationship_type: string;
   }>,
-  _user: string = "system"
-): Promise<void> {
-  // Get existing relationships (all outgoing)
-  const { getOutgoingRelationships } = await import(
-    "./operations/relationships.js"
-  );
+  _user: string = "system",
+) {
   const existing = getOutgoingRelationships(db, entityId, entityType);
   const existingSet = new Set(
-    existing.map((r) => `${r.relationship_type}:${r.to_type}:${r.to_id}`)
+    existing.map((r) => `${r.relationship_type}:${r.to_type}:${r.to_id}`),
   );
 
-  // Add relationships from cross-references (defaults to 'references' type)
   for (const ref of references) {
     const relType = ref.relationshipType || "references";
     const key = `${relType}:${ref.type}:${ref.id}`;
@@ -614,22 +551,16 @@ async function syncRelationships(
             ? JSON.stringify({ anchor: ref.anchor })
             : undefined,
         });
-      } catch (error) {
-        // Ignore errors (e.g., target not found, duplicate)
-      }
+      } catch (error) {}
     }
   }
 
-  // Add relationships from frontmatter
-  // Handle both DB format (to_id/to_type) and simplified format (target_id/target_type)
   if (frontmatterRels && Array.isArray(frontmatterRels)) {
     for (const rel of frontmatterRels) {
-      // Support both formats
       const toId = rel.to_id || rel.target_id;
       const toType = rel.to_type || rel.target_type;
 
       if (!toId || !toType) {
-        // Skip invalid relationships
         continue;
       }
 
@@ -643,15 +574,10 @@ async function syncRelationships(
             to_type: toType as "spec" | "issue",
             relationship_type: rel.relationship_type as any,
           });
-        } catch (error) {
-          // Ignore errors
-        }
+        } catch (error) {}
       }
     }
   }
-
-  // Note: We preserve existing relationships not in frontmatter
-  // This allows relationships added via CLI/UI to persist
 }
 
 /**
@@ -661,7 +587,7 @@ function entityToFrontmatter(
   entity: Spec | Issue,
   entityType: "spec" | "issue",
   relationships: Array<any>,
-  tags: string[]
+  tags: string[],
 ): Record<string, any> {
   const base: Record<string, any> = {
     id: entity.id,
@@ -670,7 +596,6 @@ function entityToFrontmatter(
     created_at: entity.created_at,
   };
 
-  // Only add optional fields if they have values
   if (entity.parent_id) base.parent_id = entity.parent_id;
   if (tags.length > 0) base.tags = tags;
   if (relationships.length > 0) base.relationships = relationships;
@@ -684,7 +609,6 @@ function entityToFrontmatter(
       status: issue.status,
     };
 
-    // Only add optional issue fields if they have values
     if (issue.assignee) result.assignee = issue.assignee;
     if (issue.closed_at) result.closed_at = issue.closed_at;
 

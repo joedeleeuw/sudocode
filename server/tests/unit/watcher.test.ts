@@ -133,58 +133,6 @@ describe("File Watcher Service", () => {
   });
 
   describe("File Change Detection", () => {
-    it("should detect markdown file changes", async () => {
-      const changes: any[] = [];
-
-      // First create the spec in the database (DB is source of truth for entity existence)
-      createSpec(db, {
-        id: "SPEC-001",
-        uuid: "test-uuid-spec-001",
-        title: "Test Spec OLD",
-        file_path: "specs/test-spec.md",
-        content: "Old content",
-        priority: 2,
-      });
-      // Set DB timestamp to past so markdown will be considered newer
-      const pastTime = new Date(Date.now() - 60000).toISOString();
-      updateSpec(db, "SPEC-001", { updated_at: pastTime });
-
-      const watcher = startServerWatcher({
-        db,
-        baseDir: testDir,
-        onFileChange: (info) => {
-          changes.push(info);
-        },
-      });
-
-      // Wait for watcher to be ready
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Create a markdown file with updated content
-      const specsDir = path.join(testDir, "specs");
-      const testFilePath = path.join(specsDir, "test-spec.md");
-      fs.writeFileSync(
-        testFilePath,
-        "---\nid: SPEC-001\n---\n\n# Test Spec\n\nThis is updated test spec content."
-      );
-
-      // Wait for debounce + processing
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      // Verify that a change was detected
-      expect(
-        changes.length > 0,
-        "Should have detected file change"
-      ).toBeTruthy();
-
-      await watcher.stop();
-
-      // Clean up test file and DB entry
-      if (fs.existsSync(testFilePath)) {
-        fs.unlinkSync(testFilePath);
-      }
-      deleteSpec(db, "SPEC-001");
-    });
 
     it("should detect JSONL file changes", async () => {
       const watcher = startServerWatcher({

@@ -1,4 +1,6 @@
 cache.db*
+.publication.json*
+*.publication
 issues/
 specs/
 worktrees/

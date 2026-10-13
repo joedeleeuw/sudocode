@@ -7,7 +7,19 @@ import * as fs from "fs";
 import * as path from "path";
 import { initDatabase } from "../../src/db.js";
 import { createSpec, getSpec } from "../../src/operations/specs.js";
-import { createIssue, getIssue } from "../../src/operations/issues.js";
+import {
+  createIssue,
+  getIssue,
+  updateIssue,
+} from "../../src/operations/issues.js";
+import {
+  exportSpecsToJSONL,
+  exportIssuesToJSONL,
+} from "../../src/export.js";
+import {
+  readJSONLSnapshot,
+  recordJSONLSync,
+} from "../../src/jsonl-sync-state.js";
 import {
   addRelationship,
   getOutgoingRelationships,
@@ -21,6 +33,7 @@ import {
   countReferences,
   updateTextReferences,
   importFromJSONL,
+  importJSONLIfStale,
 } from "../../src/import.js";
 import type Database from "better-sqlite3";
 import type { SpecJSONL, IssueJSONL } from "../../src/types.js";
@@ -864,6 +877,115 @@ describe("Import Operations", () => {
       expect(relationships[0].to_id).toBe("issue-001");
       expect(relationships[0].to_type).toBe("issue");
       expect(relationships[0].relationship_type).toBe("implements");
+    });
+  });
+
+  describe("parent_uuid healing", () => {
+    /**
+     * Seed the cache the way builds before e89b2f9a left it: parent_id set,
+     * parent_uuid NULL (their updateIssue/updateSpec never wrote parent_uuid
+     * and import skips unchanged rows, so the NULL persists).
+     */
+    function seedStaleSpecParentUuid() {
+      createSpec(db, {
+        id: "spec-parent",
+        uuid: "uuid-spec-parent",
+        title: "Parent",
+        file_path: "parent.md",
+      });
+      createSpec(db, {
+        id: "spec-child",
+        uuid: "uuid-spec-child",
+        title: "Child",
+        file_path: "child.md",
+      });
+      db.prepare(
+        "UPDATE specs SET parent_id = ?, parent_uuid = NULL WHERE id = ?"
+      ).run("spec-parent", "spec-child");
+    }
+
+    function seedStaleIssueParentUuid() {
+      createIssue(db, {
+        id: "issue-parent",
+        uuid: "uuid-issue-parent",
+        title: "Parent",
+        content: "",
+      });
+      createIssue(db, {
+        id: "issue-child",
+        uuid: "uuid-issue-child",
+        title: "Child",
+        content: "",
+      });
+      db.prepare(
+        "UPDATE issues SET parent_id = ?, parent_uuid = NULL WHERE id = ?"
+      ).run("issue-parent", "issue-child");
+    }
+
+    async function writeCurrentJSONL() {
+      const specs = exportSpecsToJSONL(db);
+      const issues = exportIssuesToJSONL(db);
+      // The tracked JSONL carries the correct parent_uuid (written by builds
+      // that set it on create); the stale cache does not.
+      for (const s of specs) {
+        if (s.id === "spec-child") s.parent_uuid = "uuid-spec-parent";
+      }
+      for (const i of issues) {
+        if (i.id === "issue-child") i.parent_uuid = "uuid-issue-parent";
+      }
+      await writeJSONL(path.join(TEST_DIR, "specs.jsonl"), specs);
+      await writeJSONL(path.join(TEST_DIR, "issues.jsonl"), issues);
+    }
+
+    it("should heal stale parent_uuid on import and keep it through an unrelated write and export", async () => {
+      seedStaleSpecParentUuid();
+      seedStaleIssueParentUuid();
+      await writeCurrentJSONL();
+
+      // Content is unchanged (same updated_at), so import skips both rows...
+      const result = await importFromJSONL(db, { inputDir: TEST_DIR });
+      expect(result.specs.updated).toBe(0);
+      expect(result.issues.updated).toBe(0);
+
+      // ...but the stale parent_uuid must still be reconciled from parent_id.
+      expect(getSpec(db, "spec-child")!.parent_uuid).toBe("uuid-spec-parent");
+      expect(getIssue(db, "issue-child")!.parent_uuid).toBe(
+        "uuid-issue-parent"
+      );
+
+      // An unrelated write followed by export must not re-introduce the NULL.
+      updateIssue(db, "issue-parent", { priority: 1 });
+
+      const exportedIssues = exportIssuesToJSONL(db);
+      const exportedSpecs = exportSpecsToJSONL(db);
+      expect(
+        exportedIssues.find((i) => i.id === "issue-child")!.parent_uuid
+      ).toBe("uuid-issue-parent");
+      expect(
+        exportedSpecs.find((s) => s.id === "spec-child")!.parent_uuid
+      ).toBe("uuid-spec-parent");
+      // No record lost.
+      expect(exportedIssues).toHaveLength(2);
+      expect(exportedSpecs).toHaveLength(2);
+    });
+
+    it("should heal stale parent_uuid even when the JSONL sync state is current", async () => {
+      seedStaleIssueParentUuid();
+      await writeCurrentJSONL();
+
+      // Cache claims to be in sync with the JSONL, so no import runs...
+      recordJSONLSync(db, readJSONLSnapshot(path.join(TEST_DIR, "specs.jsonl")));
+      recordJSONLSync(
+        db,
+        readJSONLSnapshot(path.join(TEST_DIR, "issues.jsonl"))
+      );
+      const result = await importJSONLIfStale(db, TEST_DIR);
+      expect(result).toBeNull();
+
+      // ...but the stale row must still be healed.
+      expect(getIssue(db, "issue-child")!.parent_uuid).toBe(
+        "uuid-issue-parent"
+      );
     });
   });
 

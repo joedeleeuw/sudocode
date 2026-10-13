@@ -116,6 +116,27 @@ export interface ChangeDetection {
 }
 
 /**
+ * Reconcile parent_uuid with parent_id for every spec and issue.
+ *
+ * Cache databases built before updateIssue/updateSpec kept parent_uuid in
+ * step with parent_id can hold rows whose parent_id is correct but whose
+ * parent_uuid is NULL or stale. Change detection compares only updated_at,
+ * so importing the current JSONL never touches those rows and every export
+ * re-emits the stale parent_uuid. This pass derives parent_uuid from
+ * parent_id directly, healing such caches without user action. It is a no-op
+ * for consistent databases.
+ */
+export function reconcileParentUuids(db: Database.Database): void {
+  for (const table of ["specs", "issues"] as const) {
+    db.prepare(
+      `UPDATE ${table}
+       SET parent_uuid = (SELECT p.uuid FROM ${table} p WHERE p.id = ${table}.parent_id)
+       WHERE parent_uuid IS NOT (SELECT p.uuid FROM ${table} p WHERE p.id = ${table}.parent_id)`
+    ).run();
+  }
+}
+
+/**
  * Detect changes between existing and incoming entities
  * Uses UUID as the source of truth for entity identity
  */
@@ -984,6 +1005,11 @@ export async function importFromJSONL(
       // References within the imported data should already be using the correct IDs
       // Updating all references globally would incorrectly change references to the local entity
 
+      // Heal rows whose parent_uuid drifted from parent_id (caches written by
+      // builds that did not maintain parent_uuid): change detection skips
+      // them as unchanged, so reconcile them explicitly.
+      reconcileParentUuids(db);
+
       recordJSONLSync(db, specsSnapshot);
       recordJSONLSync(db, issuesSnapshot);
     });
@@ -1022,11 +1048,17 @@ export async function importFromJSONL(
  * exactly its current content. Covers a newly created cache.db (fresh clone or
  * worktree) and JSONL changed underneath the database by git. Must run before
  * anything reads or writes the database; returns null when nothing was stale.
+ *
+ * Always reconciles parent_uuid with parent_id first, so caches written by
+ * builds that did not maintain parent_uuid heal on the next command even when
+ * no import is needed.
  */
 export async function importJSONLIfStale(
   db: Database.Database,
   sudocodeDir: string
 ): Promise<ImportResult | null> {
+  reconcileParentUuids(db);
+
   const specs = readJSONLSnapshot(path.join(sudocodeDir, "specs.jsonl"));
   const issues = readJSONLSnapshot(path.join(sudocodeDir, "issues.jsonl"));
   if (isJSONLSynced(db, specs) && isJSONLSynced(db, issues)) {

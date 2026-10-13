@@ -221,12 +221,14 @@ export function updateIssue(
     throw new Error(`Issue not found: ${id}`);
   }
 
-  // Validate parent_id exists if provided
+  // Validate parent_id exists if provided and resolve its uuid
+  let parent_uuid: string | null = null;
   if (input.parent_id) {
     const parent = getIssue(db, input.parent_id);
     if (!parent) {
       throw new Error(`Parent issue not found: ${input.parent_id}`);
     }
+    parent_uuid = parent.uuid;
   }
 
   const updates: string[] = [];
@@ -276,6 +278,10 @@ export function updateIssue(
   if (input.parent_id !== undefined && input.parent_id !== existing.parent_id) {
     updates.push("parent_id = @parent_id");
     params.parent_id = input.parent_id;
+    // Keep parent_uuid consistent with parent_id: store the new parent's
+    // uuid, or clear it when the parent is removed.
+    updates.push("parent_uuid = @parent_uuid");
+    params.parent_uuid = input.parent_id ? parent_uuid : null;
   }
   if (
     input.archived !== undefined &&

@@ -32,11 +32,6 @@ vi.mock("../../../src/operations/external-links.js", () => ({
   findIssuesByExternalLink: vi.fn().mockReturnValue([]),
   getSpecFromJsonl: vi.fn().mockReturnValue(null),
   getIssueFromJsonl: vi.fn().mockReturnValue(null),
-  updateSpecExternalLinkSync: vi.fn(),
-  updateIssueExternalLinkSync: vi.fn(),
-  deleteIssueFromJsonl: vi.fn(),
-  closeIssueInJsonl: vi.fn(),
-  removeExternalLinkFromIssue: vi.fn(),
 }));
 
 import {
@@ -50,9 +45,6 @@ import {
   findIssuesByExternalLink,
   getSpecFromJsonl,
   getIssueFromJsonl,
-  deleteIssueFromJsonl,
-  closeIssueInJsonl,
-  removeExternalLinkFromIssue,
 } from "../../../src/operations/external-links.js";
 
 // Type assertion helper for mocked functions
@@ -502,9 +494,6 @@ describe("SyncCoordinator", () => {
         expect(writeJSONLSync).not.toHaveBeenCalled();
       });
     });
-  });
-
-  describe("Entity Type Detection", () => {
   });
 
   describe("Conflict Resolution", () => {

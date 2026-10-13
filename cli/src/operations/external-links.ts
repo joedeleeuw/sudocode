@@ -1,7 +1,5 @@
 /**
- * External link operations for Specs and Issues
- * External links are stored in JSONL (not SQLite), so these operations
- * work directly with JSONL files.
+ * External link lookups for Specs and Issues, read from the tracked JSONL.
  */
 
 import type {
@@ -9,9 +7,8 @@ import type {
   SpecJSONL,
   IssueJSONL,
   IntegrationProviderName,
-  SyncDirection,
 } from "../types.js";
-import { readJSONLSync, writeJSONLSync } from "../jsonl.js";
+import { readJSONLSync } from "../jsonl.js";
 import * as path from "path";
 
 /**
@@ -42,99 +39,6 @@ export function getSpecFromJsonl(
   const specsPath = getSpecsJsonlPath(sudocodeDir);
   const specs = readJSONLSync<SpecJSONL>(specsPath, { skipErrors: true });
   return specs.find((s) => s.id === specId) ?? null;
-}
-
-/**
- * Update a spec in JSONL
- */
-function updateSpecInJsonl(
-  sudocodeDir: string,
-  specId: string,
-  updater: (spec: SpecJSONL) => SpecJSONL
-): SpecJSONL {
-  const specsPath = getSpecsJsonlPath(sudocodeDir);
-  const specs = readJSONLSync<SpecJSONL>(specsPath, { skipErrors: true });
-
-  const index = specs.findIndex((s) => s.id === specId);
-  if (index === -1) {
-    throw new Error(`Spec not found: ${specId}`);
-  }
-
-  const updatedSpec = updater(specs[index]);
-  updatedSpec.updated_at = new Date().toISOString();
-  specs[index] = updatedSpec;
-
-  writeJSONLSync(specsPath, specs);
-  return updatedSpec;
-}
-
-/**
- * Add an external link to a spec
- */
-export function addExternalLinkToSpec(
-  sudocodeDir: string,
-  specId: string,
-  link: ExternalLink
-): SpecJSONL {
-  return updateSpecInJsonl(sudocodeDir, specId, (spec) => {
-    const links = spec.external_links || [];
-
-    // Check for duplicate
-    if (
-      links.some(
-        (l) =>
-          l.provider === link.provider && l.external_id === link.external_id
-      )
-    ) {
-      throw new Error(
-        `Link already exists: ${link.provider}:${link.external_id}`
-      );
-    }
-
-    links.push(link);
-    return { ...spec, external_links: links };
-  });
-}
-
-/**
- * Remove an external link from a spec
- */
-export function removeExternalLinkFromSpec(
-  sudocodeDir: string,
-  specId: string,
-  externalId: string
-): SpecJSONL {
-  return updateSpecInJsonl(sudocodeDir, specId, (spec) => {
-    const links = (spec.external_links || []).filter(
-      (l) => l.external_id !== externalId
-    );
-    return { ...spec, external_links: links.length > 0 ? links : undefined };
-  });
-}
-
-/**
- * Update sync metadata for an external link on a spec
- */
-export function updateSpecExternalLinkSync(
-  sudocodeDir: string,
-  specId: string,
-  externalId: string,
-  updates: Partial<
-    Pick<
-      ExternalLink,
-      "last_synced_at" | "external_updated_at" | "sync_enabled"
-    >
-  >
-): SpecJSONL {
-  return updateSpecInJsonl(sudocodeDir, specId, (spec) => {
-    const links = (spec.external_links || []).map((l) => {
-      if (l.external_id === externalId) {
-        return { ...l, ...updates };
-      }
-      return l;
-    });
-    return { ...spec, external_links: links };
-  });
 }
 
 /**
@@ -185,99 +89,6 @@ export function getIssueFromJsonl(
 }
 
 /**
- * Update an issue in JSONL
- */
-function updateIssueInJsonl(
-  sudocodeDir: string,
-  issueId: string,
-  updater: (issue: IssueJSONL) => IssueJSONL
-): IssueJSONL {
-  const issuesPath = getIssuesJsonlPath(sudocodeDir);
-  const issues = readJSONLSync<IssueJSONL>(issuesPath, { skipErrors: true });
-
-  const index = issues.findIndex((i) => i.id === issueId);
-  if (index === -1) {
-    throw new Error(`Issue not found: ${issueId}`);
-  }
-
-  const updatedIssue = updater(issues[index]);
-  updatedIssue.updated_at = new Date().toISOString();
-  issues[index] = updatedIssue;
-
-  writeJSONLSync(issuesPath, issues);
-  return updatedIssue;
-}
-
-/**
- * Add an external link to an issue
- */
-export function addExternalLinkToIssue(
-  sudocodeDir: string,
-  issueId: string,
-  link: ExternalLink
-): IssueJSONL {
-  return updateIssueInJsonl(sudocodeDir, issueId, (issue) => {
-    const links = issue.external_links || [];
-
-    // Check for duplicate
-    if (
-      links.some(
-        (l) =>
-          l.provider === link.provider && l.external_id === link.external_id
-      )
-    ) {
-      throw new Error(
-        `Link already exists: ${link.provider}:${link.external_id}`
-      );
-    }
-
-    links.push(link);
-    return { ...issue, external_links: links };
-  });
-}
-
-/**
- * Remove an external link from an issue
- */
-export function removeExternalLinkFromIssue(
-  sudocodeDir: string,
-  issueId: string,
-  externalId: string
-): IssueJSONL {
-  return updateIssueInJsonl(sudocodeDir, issueId, (issue) => {
-    const links = (issue.external_links || []).filter(
-      (l) => l.external_id !== externalId
-    );
-    return { ...issue, external_links: links.length > 0 ? links : undefined };
-  });
-}
-
-/**
- * Update sync metadata for an external link on an issue
- */
-export function updateIssueExternalLinkSync(
-  sudocodeDir: string,
-  issueId: string,
-  externalId: string,
-  updates: Partial<
-    Pick<
-      ExternalLink,
-      "last_synced_at" | "external_updated_at" | "sync_enabled"
-    >
-  >
-): IssueJSONL {
-  return updateIssueInJsonl(sudocodeDir, issueId, (issue) => {
-    const links = (issue.external_links || []).map((l) => {
-      if (l.external_id === externalId) {
-        return { ...l, ...updates };
-      }
-      return l;
-    });
-    return { ...issue, external_links: links };
-  });
-}
-
-/**
  * Find issues by external link
  */
 export function findIssuesByExternalLink(
@@ -324,63 +135,4 @@ export function findEntitiesByExternalLink(
     specs: findSpecsByExternalLink(sudocodeDir, provider, externalId),
     issues: findIssuesByExternalLink(sudocodeDir, provider, externalId),
   };
-}
-
-// =============================================================================
-// Auto-Import Operations
-// =============================================================================
-
-/**
- * Delete an issue by ID
- *
- * @param sudocodeDir - Path to .sudocode directory
- * @param issueId - ID of issue to delete
- * @returns true if deleted, false if not found
- */
-export function deleteIssueFromJsonl(
-  sudocodeDir: string,
-  issueId: string
-): boolean {
-  const issuesPath = getIssuesJsonlPath(sudocodeDir);
-  const issues = readJSONLSync<IssueJSONL>(issuesPath, { skipErrors: true });
-
-  const index = issues.findIndex((i) => i.id === issueId);
-  if (index === -1) {
-    return false;
-  }
-
-  issues.splice(index, 1);
-  writeJSONLSync(issuesPath, issues);
-  return true;
-}
-
-/**
- * Close an issue (set status to 'closed')
- *
- * @param sudocodeDir - Path to .sudocode directory
- * @param issueId - ID of issue to close
- * @returns The closed issue, or null if not found
- */
-export function closeIssueInJsonl(
-  sudocodeDir: string,
-  issueId: string
-): IssueJSONL | null {
-  const issuesPath = getIssuesJsonlPath(sudocodeDir);
-  const issues = readJSONLSync<IssueJSONL>(issuesPath, { skipErrors: true });
-
-  const index = issues.findIndex((i) => i.id === issueId);
-  if (index === -1) {
-    return null;
-  }
-
-  const now = new Date().toISOString();
-  issues[index] = {
-    ...issues[index],
-    status: "closed",
-    closed_at: now,
-    updated_at: now,
-  };
-
-  writeJSONLSync(issuesPath, issues);
-  return issues[index];
 }

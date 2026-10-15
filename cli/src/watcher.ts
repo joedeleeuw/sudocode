@@ -1029,7 +1029,10 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   watcher.on("change", (filePath) => handleFileChange(filePath, "change"));
   watcher.on("unlink", (filePath) => handleFileChange(filePath, "unlink"));
 
-  watcher.on("ready", async () => {
+  // once: chokidar emits "ready" again each time it starts watching the parent
+  // of a missing path (an absent specs/ or issues/ directory), which re-ran
+  // this startup work concurrently
+  watcher.once("ready", async () => {
     const watched = watcher.getWatched();
     stats.filesWatched = Object.keys(watched).reduce(
       (total, dir) => total + watched[dir].length,

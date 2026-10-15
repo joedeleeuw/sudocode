@@ -31,6 +31,20 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 
+const hasWorktrunk = (() => {
+  try {
+    execSync("wt --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/** Providers available on this machine; worktrunk needs `wt` on PATH */
+const PROVIDERS: WorktreeConfig["provider"][] = hasWorktrunk
+  ? ["git", "worktrunk"]
+  : ["git"];
+
 describe("Worktree Integration Tests", () => {
   let db: Database.Database;
   let testDbPath: string;
@@ -320,9 +334,10 @@ describe("Worktree Integration Tests", () => {
   });
 
   describe("Startup Orphaned Cleanup", () => {
-    it("should cleanup orphaned worktrees on startup", async () => {
+    it.each(PROVIDERS)("should preserve worktrees recorded by executions (%s provider)", async (provider) => {
       const config: WorktreeConfig = {
         ...DEFAULT_WORKTREE_CONFIG,
+        provider,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -427,9 +442,10 @@ describe("Worktree Integration Tests", () => {
       expect(!fs.existsSync(orphanedPath)).toBeTruthy();
     });
 
-    it("should not cleanup worktrees for running executions", async () => {
+    it.each(PROVIDERS)("should not cleanup worktrees for running executions (%s provider)", async (provider) => {
       const config: WorktreeConfig = {
         ...DEFAULT_WORKTREE_CONFIG,
+        provider,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -918,15 +934,6 @@ describe("Worktree Integration Tests", () => {
         "{prefix}/{externalId}-{title}"
       );
     });
-
-    const hasWorktrunk = (() => {
-      try {
-        execSync("wt --version", { stdio: "ignore" });
-        return true;
-      } catch {
-        return false;
-      }
-    })();
 
     it.skipIf(!hasWorktrunk)(
       "recognizes a templated worktrunk worktree as managed",

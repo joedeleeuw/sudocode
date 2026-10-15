@@ -8,6 +8,7 @@
  * @module execution/worktree/config
  */
 
+import fs from 'fs';
 import path from 'path';
 import { getConfig } from '@sudocode-ai/cli/dist/config.js';
 import type { WorktreeConfig, WorktreeInfo } from './types.js';
@@ -300,6 +301,17 @@ export function isManagedWorktree(
   return config.provider === 'worktrunk'
     ? worktree.branch.startsWith(`${config.branchPrefix}/`)
     : worktree.path.includes(config.worktreeStoragePath);
+}
+
+/**
+ * A worktree path with symlinks resolved, so a path an execution recorded
+ * (such as macOS /var/...) equals the one git lists for the same directory
+ * (/private/var/...). A path that no longer exists is only made absolute.
+ */
+export function canonicalWorktreePath(worktreePath: string): string {
+  return fs.existsSync(worktreePath)
+    ? fs.realpathSync(worktreePath)
+    : path.resolve(worktreePath);
 }
 
 /**

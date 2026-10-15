@@ -17,6 +17,7 @@ import {
   type IWorktreeManager,
 } from "../execution/worktree/manager.js";
 import {
+  canonicalWorktreePath,
   getWorktreeConfig,
   isManagedWorktree,
   renderBranchTemplate,
@@ -401,20 +402,24 @@ export class ExecutionLifecycleService {
         isManagedWorktree(config, w)
       );
 
+      // Paths recorded by executions and workflows, compared canonically
+      const recordedPaths = new Set(
+        (
+          this.db
+            .prepare(
+              `SELECT worktree_path FROM executions WHERE worktree_path IS NOT NULL
+               UNION
+               SELECT worktree_path FROM workflows WHERE worktree_path IS NOT NULL`
+            )
+            .all() as { worktree_path: string }[]
+        ).map((row) => canonicalWorktreePath(row.worktree_path))
+      );
+
       // For each managed worktree, check if an execution or workflow records it
       for (const worktree of managedWorktrees) {
         const worktreePath = worktree.path;
 
-        const owner = this.db
-          .prepare(
-            `SELECT id FROM executions WHERE worktree_path = ?
-             UNION ALL
-             SELECT id FROM workflows WHERE worktree_path = ?
-             LIMIT 1`
-          )
-          .get(worktreePath, worktreePath);
-
-        if (!owner) {
+        if (!recordedPaths.has(canonicalWorktreePath(worktreePath))) {
           // Orphaned worktree - no execution or workflow records it, cleanup
           console.log(
             `Cleaning up orphaned worktree: ${worktreePath} (no execution or workflow found)`

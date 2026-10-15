@@ -6,7 +6,10 @@ import {
 import { GitSyncCli } from "../execution/worktree/git-sync-cli.js";
 import { ConflictDetector } from "../execution/worktree/conflict-detector.js";
 import * as fs from "fs";
-import { isManagedWorktree } from "../execution/worktree/config.js";
+import {
+  canonicalWorktreePath,
+  isManagedWorktree,
+} from "../execution/worktree/config.js";
 
 export function createRepoInfoRouter(): Router {
   const router = Router();
@@ -82,14 +85,22 @@ export function createRepoInfoRouter(): Router {
         (worktree) => isManagedWorktree(config, worktree)
       );
 
+      // First execution recording each worktree, keyed by canonical path so
+      // a recorded /var/... path matches git's /private/var/... listing
+      const executionsByPath = new Map<string, unknown>();
+      for (const execution of db
+        .prepare(
+          `SELECT * FROM executions WHERE worktree_path IS NOT NULL ORDER BY rowid`
+        )
+        .all() as { worktree_path: string }[]) {
+        const key = canonicalWorktreePath(execution.worktree_path);
+        if (!executionsByPath.has(key)) executionsByPath.set(key, execution);
+      }
+
       const worktrees = managed.map((worktree) => {
-        const execution = db
-          .prepare(
-            `SELECT * FROM executions
-               WHERE worktree_path = ?
-               LIMIT 1`
-          )
-          .get(worktree.path);
+        const execution = executionsByPath.get(
+          canonicalWorktreePath(worktree.path)
+        );
 
         // Worktree exists but no execution record - return minimal info
         return (

@@ -38,6 +38,7 @@ import {
 import { AcpExecutorWrapper } from "../execution/executors/acp-executor-wrapper.js";
 import type { AgentType } from "@sudocode-ai/types/agents";
 import { PromptResolver } from "./prompt-resolver.js";
+import { getIssueById } from "./issues.js";
 import { execFileNoThrow } from "../utils/execFileNoThrow.js";
 import type { NarrationConfig } from "./narration-service.js";
 import { getNarrationConfig } from "./narration-service.js";
@@ -228,15 +229,9 @@ export class ExecutionService {
     const mergedConfig = await this.buildExecutionConfig(agentType, config);
 
     // Get issue if issueId is provided (orchestrator executions don't have an issue)
-    let issue: { id: string; title: string } | undefined;
-    if (issueId) {
-      issue = this.db
-        .prepare("SELECT * FROM issues WHERE id = ?")
-        .get(issueId) as { id: string; title: string } | undefined;
-
-      if (!issue) {
-        throw new Error(`Issue ${issueId} not found`);
-      }
+    const issue = issueId ? getIssueById(this.db, issueId) : null;
+    if (issueId && !issue) {
+      throw new Error(`Issue ${issueId} not found`);
     }
 
     // Get the current branch as default (instead of hardcoding "main")
@@ -340,6 +335,7 @@ export class ExecutionService {
         const result = await this.lifecycleService.createExecutionWithWorktree({
           issueId,
           issueTitle: issue.title,
+          issueExternalId: issue.external_links?.[0]?.external_id,
           agentType: agentType,
           targetBranch: mergedConfig.baseBranch || defaultBranch,
           repoPath: this.repoPath,

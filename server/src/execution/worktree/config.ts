@@ -31,8 +31,24 @@ export const DEFAULT_WORKTREE_CONFIG: WorktreeConfig = {
   enableSparseCheckout: false,
   sparseCheckoutPatterns: undefined,
   branchPrefix: 'wt-sudocode',
+  branchTemplate: '{prefix}/{executionId}/{title}',
   cleanupOrphanedWorktreesOnStartup: false,
 };
+
+/**
+ * Tokens a `branchTemplate` may use (see WorktreeConfig.branchTemplate)
+ */
+export const BRANCH_TEMPLATE_TOKENS = [
+  'prefix',
+  'issueId',
+  'externalId',
+  'title',
+  'executionId',
+] as const;
+
+export type BranchTemplateToken = (typeof BRANCH_TEMPLATE_TOKENS)[number];
+
+const TEMPLATE_TOKEN_PATTERN = /\{([^{}]*)\}/g;
 
 /**
  * Validate and normalize worktree configuration
@@ -134,6 +150,15 @@ export function validateWorktreeConfig(
     }
   }
 
+  // Validate branchTemplate. Like provider, a bad template is an error: a
+  // fallback would name branches differently from what the user configured.
+  if (rawConfig.branchTemplate !== undefined) {
+    config.branchTemplate = validateBranchTemplate(
+      rawConfig.branchTemplate,
+      config.provider
+    );
+  }
+
   // Validate cleanupOrphanedWorktreesOnStartup
   if (rawConfig.cleanupOrphanedWorktreesOnStartup !== undefined) {
     if (typeof rawConfig.cleanupOrphanedWorktreesOnStartup === 'boolean') {
@@ -147,6 +172,75 @@ export function validateWorktreeConfig(
   }
 
   return { config, warnings };
+}
+
+/**
+ * Validate a branch name template: known tokens only, characters git allows
+ * in branch names, and the `{prefix}/` start that worktrunk detection needs
+ *
+ * @throws Error naming the offending token or rule
+ */
+function validateBranchTemplate(
+  template: unknown,
+  provider: WorktreeConfig['provider']
+): string {
+  if (typeof template !== 'string' || template.length === 0) {
+    throw new Error(
+      `Invalid worktree.branchTemplate ${JSON.stringify(template)}: must be a non-empty string`
+    );
+  }
+
+  for (const [token, name] of template.matchAll(TEMPLATE_TOKEN_PATTERN)) {
+    if (!(BRANCH_TEMPLATE_TOKENS as readonly string[]).includes(name)) {
+      throw new Error(
+        `Invalid worktree.branchTemplate token ${token}: must be one of ${BRANCH_TEMPLATE_TOKENS.map((t) => `{${t}}`).join(', ')}`
+      );
+    }
+  }
+
+  const literal = template.replace(TEMPLATE_TOKEN_PATTERN, 'x');
+  if (/[{}]/.test(literal) || !isValidGitBranchPrefix(literal)) {
+    throw new Error(
+      `Invalid worktree.branchTemplate ${JSON.stringify(template)}: contains an unclosed brace or characters git does not allow in branch names`
+    );
+  }
+
+  if (provider === 'worktrunk' && !template.startsWith('{prefix}/')) {
+    throw new Error(
+      `Invalid worktree.branchTemplate ${JSON.stringify(template)}: must start with "{prefix}/" with the "worktrunk" provider, which recognizes the worktrees it manages by that prefix`
+    );
+  }
+
+  return template;
+}
+
+/**
+ * Render an execution branch name from a validated template. A token that
+ * renders empty is dropped together with one adjacent separator, so an
+ * optional token such as `{externalId}` leaves no dangling `-` or `/`.
+ *
+ * @param template - Validated `branchTemplate`
+ * @param values - Branch-safe value for every token
+ * @returns Branch name
+ */
+export function renderBranchTemplate(
+  template: string,
+  values: Record<BranchTemplateToken, string>
+): string {
+  const withoutEmpty = BRANCH_TEMPLATE_TOKENS.filter(
+    (token) => values[token] === ''
+  ).reduce(
+    (text, token) =>
+      text
+        .replace(new RegExp(`\\{${token}\\}[-_./]`, 'g'), '')
+        .replace(new RegExp(`[-_./]?\\{${token}\\}`, 'g'), ''),
+    template
+  );
+
+  return withoutEmpty.replace(
+    TEMPLATE_TOKEN_PATTERN,
+    (_token, name: BranchTemplateToken) => values[name]
+  );
 }
 
 /**

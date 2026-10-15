@@ -272,6 +272,21 @@ export interface WorktreeConfig {
   sparseCheckoutPatterns?: string[];
   /** Branch naming prefix (default: "wt-sudocode"; `sudocode init` writes "sudocode") */
   branchPrefix: string;
+  /**
+   * Template for execution branch names (default: "{prefix}/{executionId}/{title}").
+   * Tokens:
+   * - `{prefix}`: `branchPrefix`
+   * - `{issueId}`: the issue's ID
+   * - `{externalId}`: the ID of the issue's first external link, slugified; empty without one
+   * - `{title}`: the issue title, slugified
+   * - `{executionId}`: the first 8 characters of the execution ID
+   *
+   * A token that renders empty is dropped together with one adjacent separator
+   * (`-`, `_`, `.` or `/`). When the rendered name is already a branch, `-2`,
+   * `-3`, … is appended. With the "worktrunk" provider the template must start
+   * with `{prefix}/`, which is how sudocode recognizes the worktrees it manages.
+   */
+  branchTemplate: string;
   /** Cleanup orphaned worktrees on server startup (default: false) */
   cleanupOrphanedWorktreesOnStartup: boolean;
 }

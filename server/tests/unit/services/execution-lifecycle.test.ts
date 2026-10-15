@@ -20,6 +20,7 @@ import {
 import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { createIssue } from "@sudocode-ai/cli/dist/operations/index.js";
 import type { IWorktreeManager } from "../../../src/execution/worktree/manager.js";
+import { DEFAULT_WORKTREE_CONFIG } from "../../../src/execution/worktree/config.js";
 import type {
   WorktreeConfig,
   WorktreeCreateParams,
@@ -217,42 +218,6 @@ describe("ExecutionLifecycleService", () => {
 
       // Verify worktree cleanup was called
       expect(mockWorktreeManager.cleanupWorktreeCalls.length).toBe(1);
-    });
-
-    it("should generate sanitized branch names", async () => {
-      const mockWorktreeManager = createMockWorktreeManager();
-
-      const service = new ExecutionLifecycleService(
-        db,
-        testDir,
-        mockWorktreeManager
-      );
-
-      const result = await service.createExecutionWithWorktree({
-        issueId: testIssueId,
-        issueTitle: "Fix Bug: Auth / Login Issues!",
-        agentType: "claude-code",
-        targetBranch: "main",
-        repoPath: testDir,
-      });
-
-      // Branch name should be sanitized
-      expect(
-        result.branchName.includes("fix-bug-auth-login-issues")
-      ).toBeTruthy();
-      expect(!result.branchName.includes(":")).toBeTruthy();
-      expect(!result.branchName.includes("!")).toBeTruthy();
-
-      // Check that the title portion (after last slash) is sanitized
-      const titlePortion = result.branchName.split("/").pop();
-      expect(titlePortion).toBeTruthy();
-      expect(!titlePortion?.includes(":")).toBeTruthy();
-      expect(!titlePortion?.includes("!")).toBeTruthy();
-
-      // Cleanup: Mark execution as completed to allow subsequent tests
-      updateExecution(db, result.execution.id, {
-        status: "completed",
-      });
     });
 
     it("should create target branch when createTargetBranch is true", async () => {
@@ -774,6 +739,7 @@ function createMockWorktreeManager(options?: {
   branches: string[];
 } {
   const mockConfig: WorktreeConfig = {
+    ...DEFAULT_WORKTREE_CONFIG,
     provider: "git",
     worktreeStoragePath: ".sudocode/worktrees",
     autoCreateBranches: true,

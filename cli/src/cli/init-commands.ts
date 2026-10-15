@@ -117,6 +117,7 @@ export async function performInitialization(
         autoDeleteBranches: false,
         enableSparseCheckout: false,
         branchPrefix: "sudocode",
+        branchTemplate: "{prefix}/{executionId}/{title}",
         cleanupOrphanedWorktreesOnStartup: false,
       },
       editor: {

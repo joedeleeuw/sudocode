@@ -153,6 +153,7 @@ import {
 import { ExecutionService } from "../../src/services/execution-service.js";
 import { ExecutionLifecycleService } from "../../src/services/execution-lifecycle.js";
 import type { IWorktreeManager } from "../../src/execution/worktree/manager.js";
+import { DEFAULT_WORKTREE_CONFIG } from "../../src/execution/worktree/config.js";
 import type {
   WorktreeCreateParams,
   WorktreeInfo,
@@ -891,6 +892,7 @@ describe("Multi-Agent Support - Phase 1 Integration", () => {
 function createMockWorktreeManager(): IWorktreeManager {
   return {
     getConfig: () => ({
+      ...DEFAULT_WORKTREE_CONFIG,
       worktreeStoragePath: ".worktrees",
       branchPrefix: "worktree",
       autoCreateBranches: true,

@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import type Database from "better-sqlite3";
-import type { AgentType, Execution } from "@sudocode-ai/types";
+import type { AgentType, Execution, ExternalLink } from "@sudocode-ai/types";
 import { execSync } from "child_process";
 import {
   WorktreeManager,
@@ -19,6 +19,7 @@ import {
 import {
   getWorktreeConfig,
   isManagedWorktree,
+  renderBranchTemplate,
 } from "../execution/worktree/config.js";
 import { createExecution, getExecution } from "./executions.js";
 import { randomUUID } from "crypto";
@@ -55,6 +56,8 @@ export interface CreateWorkflowWorktreeResult {
 export interface CreateExecutionWithWorktreeParams {
   issueId: string;
   issueTitle: string;
+  /** ID of the issue's first external link, for the `{externalId}` branch token */
+  issueExternalId?: ExternalLink["external_id"];
   agentType: AgentType;
   targetBranch: string;
   repoPath: string;
@@ -184,9 +187,21 @@ export class ExecutionLifecycleService {
     // Determine branch name based on autoCreateBranches setting
     let branchName: string;
     if (config.autoCreateBranches) {
-      // Generate branch name: {branchPrefix}/{execution-id}/{sanitized-issue-title}
-      const sanitizedTitle = sanitizeForBranchName(issueTitle);
-      branchName = `${config.branchPrefix}/${executionId.substring(0, 8)}/${sanitizedTitle}`;
+      // Generate branch name from worktree.branchTemplate
+      // (default: {prefix}/{executionId}/{title})
+      const renderedName = renderBranchTemplate(config.branchTemplate, {
+        prefix: config.branchPrefix,
+        issueId,
+        externalId: sanitizeForBranchName(params.issueExternalId ?? ""),
+        title: sanitizeForBranchName(issueTitle),
+        executionId: executionId.substring(0, 8),
+      });
+
+      // Handle branch name collision by appending -N suffix
+      branchName = renderedName;
+      for (let suffix = 2; branches.includes(branchName); suffix++) {
+        branchName = `${renderedName}-${suffix}`;
+      }
     } else {
       // Use target branch directly when not auto-creating branches
       branchName = targetBranch;

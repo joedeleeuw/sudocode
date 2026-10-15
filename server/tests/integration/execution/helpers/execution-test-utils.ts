@@ -8,6 +8,7 @@
 import Database from 'better-sqlite3';
 import { ExecutionService } from '../../../../src/services/execution-service.js';
 import { ExecutionLifecycleService } from '../../../../src/services/execution-lifecycle.js';
+import { DEFAULT_WORKTREE_CONFIG } from '../../../../src/execution/worktree/config.js';
 import { ExecutionLogsStore } from '../../../../src/services/execution-logs-store.js';
 import * as fs from 'fs/promises';
 import { vi } from 'vitest';
@@ -66,6 +67,7 @@ export function createMockWorktreeManager(): any {
     getWorktreePath: vi.fn().mockReturnValue('/tmp/test-worktree'),
     getRepoRoot: vi.fn().mockResolvedValue('/test/repo'),
     getConfig: vi.fn().mockReturnValue({
+      ...DEFAULT_WORKTREE_CONFIG,
       worktreeStoragePath: '.worktrees',
       autoCreateBranches: true,
       autoDeleteBranches: false,

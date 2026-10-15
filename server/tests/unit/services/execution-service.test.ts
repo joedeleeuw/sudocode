@@ -37,6 +37,7 @@ import {
   addRelationship,
 } from "@sudocode-ai/cli/dist/operations/index.js";
 import type { IWorktreeManager } from "../../../src/execution/worktree/manager.js";
+import { DEFAULT_WORKTREE_CONFIG } from "../../../src/execution/worktree/config.js";
 import type {
   WorktreeConfig,
   WorktreeCreateParams,
@@ -1735,6 +1736,7 @@ function createMockWorktreeManager(): IWorktreeManager & {
   };
 } {
   const config: WorktreeConfig = {
+    ...DEFAULT_WORKTREE_CONFIG,
     provider: "git",
     worktreeStoragePath: ".worktrees",
     branchPrefix: "worktree",

@@ -460,21 +460,31 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   // Paths to watch
   const specsDir = path.join(baseDir, "specs");
   const issuesDir = path.join(baseDir, "issues");
-  const specsJSONL = path.join(baseDir, "specs.jsonl");
-  const issuesJSONL = path.join(baseDir, "issues.jsonl");
+  const watchedEntries = new Set([
+    "specs",
+    "issues",
+    "specs.jsonl",
+    "issues.jsonl",
+  ]);
 
-  // Watch directories and JSONL files - chokidar will recursively watch all files inside
-  const watcher = chokidar.watch(
-    [specsDir, issuesDir, specsJSONL, issuesJSONL],
-    {
-      persistent: true,
-      ignoreInitial,
-      awaitWriteFinish: {
-        stabilityThreshold: 100, // Reduced for faster detection in tests
-        pollInterval: 50,
-      },
-    }
-  );
+  // Watch baseDir itself, limited to the directories and JSONL files above
+  // and everything inside those directories. Watching specs/ or issues/
+  // directly while it does not exist yet misses files written right after
+  // the directory is created.
+  const watcher = chokidar.watch(baseDir, {
+    persistent: true,
+    ignoreInitial,
+    ignored: (filePath: string) => {
+      const relPath = path.relative(baseDir, filePath);
+      return (
+        relPath !== "" && !watchedEntries.has(relPath.split(path.sep)[0])
+      );
+    },
+    awaitWriteFinish: {
+      stabilityThreshold: 100, // Reduced for faster detection in tests
+      pollInterval: 50,
+    },
+  });
 
   // Log watch patterns for debugging
   onLog(
@@ -1029,9 +1039,8 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   watcher.on("change", (filePath) => handleFileChange(filePath, "change"));
   watcher.on("unlink", (filePath) => handleFileChange(filePath, "unlink"));
 
-  // once: chokidar emits "ready" again each time it starts watching the parent
-  // of a missing path (an absent specs/ or issues/ directory), which re-ran
-  // this startup work concurrently
+  // once: this startup work must not run again if chokidar emits "ready"
+  // more than once
   watcher.once("ready", async () => {
     const watched = watcher.getWatched();
     stats.filesWatched = Object.keys(watched).reduce(

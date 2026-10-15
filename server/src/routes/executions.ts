@@ -748,6 +748,17 @@ export function createExecutionsRouter(): Router {
       } catch (error) {
         console.error("Error creating follow-up execution:", error);
 
+        if (error instanceof AgentError) {
+          res.status(400).json({
+            success: false,
+            data: null,
+            error: error.message,
+            code: error.code,
+            details: error.details,
+          });
+          return;
+        }
+
         // Handle specific error cases
         const errorMessage =
           error instanceof Error ? error.message : String(error);
@@ -822,6 +833,17 @@ export function createExecutionsRouter(): Router {
         });
       } catch (error) {
         console.error("Error in skip-all-permissions:", error);
+
+        if (error instanceof AgentError) {
+          res.status(400).json({
+            success: false,
+            data: null,
+            error: error.message,
+            code: error.code,
+            details: error.details,
+          });
+          return;
+        }
 
         const errorMessage =
           error instanceof Error ? error.message : String(error);

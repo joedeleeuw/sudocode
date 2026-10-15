@@ -67,7 +67,6 @@ export interface ExecutionConfig {
   timeout?: number;
   baseBranch?: string;
   createBaseBranch?: boolean;
-  branchName?: string;
   reuseWorktreePath?: string; // If set, reuse existing worktree at this path
   checkpointInterval?: number;
   continueOnStepFailure?: boolean;
@@ -446,12 +445,11 @@ export class ExecutionService {
 
     // 4. In-process execution with executor wrapper (fallback when no worker pool)
     // Extract agent-relevant config fields (exclude sudocode-specific fields like mode,
-    // baseBranch, createBaseBranch, branchName, reuseWorktreePath, etc.)
+    // baseBranch, createBaseBranch, reuseWorktreePath, etc.)
     const {
       mode: _mode,
       baseBranch: _baseBranch,
       createBaseBranch: _createBaseBranch,
-      branchName: _branchName,
       reuseWorktreePath: _reuseWorktreePath,
       checkpointInterval: _checkpointInterval,
       continueOnStepFailure: _continueOnStepFailure,
@@ -788,7 +786,6 @@ ${feedback}`;
       mode: _mode,
       baseBranch: _baseBranch,
       createBaseBranch: _createBaseBranch,
-      branchName: _branchName,
       reuseWorktreePath: _reuseWorktreePath,
       checkpointInterval: _checkpointInterval,
       continueOnStepFailure: _continueOnStepFailure,

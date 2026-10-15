@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initDatabase } from "../../src/db.js";
 import { startWatcher, parseTimestampAsUTC } from "../../src/watcher.js";
+import { getSpec } from "../../src/operations/specs.js";
 import type Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
@@ -2259,4 +2260,59 @@ Test content.
       expect(errors.length).toBe(0);
     });
   });
+});
+
+describe("File Watcher without specs/ and issues/ directories", () => {
+  it("initializes once, then syncs markdown created, changed and deleted later", async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "sudocode-watcher-missing-"));
+    const db = initDatabase({ path: ":memory:" });
+    fs.writeFileSync(path.join(baseDir, "specs.jsonl"), "", "utf8");
+    fs.writeFileSync(path.join(baseDir, "issues.jsonl"), "", "utf8");
+    fs.writeFileSync(
+      path.join(baseDir, "config.json"),
+      JSON.stringify({ version: "1.0.0", sourceOfTruth: "markdown" })
+    );
+    const logs: string[] = [];
+    const control = startWatcher({
+      db,
+      baseDir,
+      onLog: (message) => logs.push(message),
+      onError: () => {},
+    });
+    const waitFor = async (condition: () => boolean) => {
+      for (let waited = 0; !condition() && waited < 10000; waited += 100) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(condition()).toBe(true);
+    };
+    const spec = () => getSpec(db, "s-smoke");
+    const specPath = path.join(baseDir, "specs", "smoke.md");
+    const writeSpec = (title: string) =>
+      fs.writeFileSync(
+        specPath,
+        `---\nid: s-smoke\ntitle: ${title}\npriority: 2\n---\n\n# ${title}\n`,
+        "utf8"
+      );
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(
+        logs.filter((log) => log.includes("Initialized cache for issues.jsonl"))
+      ).toHaveLength(1);
+
+      fs.mkdirSync(path.join(baseDir, "specs"));
+      writeSpec("Created later");
+      await waitFor(() => spec()?.title === "Created later");
+
+      writeSpec("Changed later");
+      await waitFor(() => spec()?.title === "Changed later");
+
+      fs.rmSync(specPath);
+      await waitFor(() => spec() === null);
+    } finally {
+      await control.stop();
+      db.close();
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  }, 40000);
 });

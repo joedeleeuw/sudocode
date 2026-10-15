@@ -73,6 +73,8 @@ export enum WorktreeErrorCode {
   INVALID_PATH = "INVALID_PATH",
   /** Branch not found */
   BRANCH_NOT_FOUND = "BRANCH_NOT_FOUND",
+  /** Branch to create already exists */
+  BRANCH_EXISTS = "BRANCH_EXISTS",
   /** Repository error */
   REPOSITORY_ERROR = "REPOSITORY_ERROR",
   /** Configuration error */

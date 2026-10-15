@@ -912,6 +912,89 @@ describe("Worktree Integration Tests", () => {
       }
     });
 
+    it("gives concurrent executions that render the same name distinct branches", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({
+          ...DEFAULT_WORKTREE_CONFIG,
+          branchPrefix: "team",
+          branchTemplate: "{prefix}/{externalId}-{title}",
+        })
+      );
+
+      const results = await Promise.all(
+        [1, 2, 3].map(() =>
+          service.createExecutionWithWorktree({
+            issueId: createTestIssue("Concurrent Template Issue"),
+            issueTitle: "Parallel lane",
+            issueExternalId: "ENG-7",
+            agentType: "codex",
+            targetBranch: "main",
+            repoPath: gitRepoPath,
+          })
+        )
+      );
+
+      expect(results.map((r) => checkedOutBranch(r.worktreePath)).sort()).toEqual([
+        "team/eng-7-parallel-lane",
+        "team/eng-7-parallel-lane-2",
+        "team/eng-7-parallel-lane-3",
+      ]);
+      for (const result of results) {
+        await service.cleanupExecution(result.execution.id);
+      }
+    });
+
+    it("suffixes a workflow branch that already exists", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({ ...DEFAULT_WORKTREE_CONFIG, branchPrefix: "team" })
+      );
+      const create = (workflowId: string) =>
+        service.createWorkflowWorktree({
+          workflowId,
+          workflowTitle: "Shared Title",
+          baseBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+      const first = await create("wf-abcd1234");
+      const second = await create("wf-abcd1234-again");
+
+      expect(checkedOutBranch(first.worktreePath)).toBe("team/workflow/abcd1234/shared-title");
+      expect(checkedOutBranch(second.worktreePath)).toBe("team/workflow/abcd1234/shared-title-2");
+      for (const worktree of [first, second]) {
+        await new WorktreeManager(DEFAULT_WORKTREE_CONFIG).cleanupWorktree(
+          worktree.worktreePath,
+          gitRepoPath
+        );
+      }
+    });
+
+    it("rejects a rendered name git does not accept, naming the template", async () => {
+      const create = (branchTemplate: string) =>
+        new ExecutionLifecycleService(
+          db,
+          gitRepoPath,
+          new WorktreeManager({ ...DEFAULT_WORKTREE_CONFIG, branchTemplate })
+        ).createExecutionWithWorktree({
+          issueId: createTestIssue("Invalid Rendered Name"),
+          issueTitle: "Trailing dot",
+          agentType: "codex",
+          targetBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+      await expect(create("{prefix}/{title}.")).rejects.toThrow(
+        'worktree.branchTemplate "{prefix}/{title}." rendered "wt-sudocode/trailing-dot."'
+      );
+      await expect(create("{externalId}")).rejects.toThrow(
+        'worktree.branchTemplate "{externalId}" rendered ""'
+      );
+    });
+
     it("fails config load naming an unknown token or a worktrunk template without {prefix}/", () => {
       const projectRoot = fs.mkdtempSync(path.join(testDir, "template-config-"));
       fs.mkdirSync(path.join(projectRoot, ".sudocode"));

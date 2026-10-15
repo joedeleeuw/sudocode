@@ -198,6 +198,16 @@ export class WorktreeManager implements IWorktreeManager {
     } = params;
 
     try {
+      if (
+        createBranch &&
+        (await this.git.listBranches(repoPath)).includes(branchName)
+      ) {
+        throw new WorktreeError(
+          `Branch ${branchName} already exists`,
+          WorktreeErrorCode.BRANCH_EXISTS
+        );
+      }
+
       let createdPath: string;
       if (this.config.provider === "worktrunk") {
         // wt creates the branch and the worktree at its worktree-path template

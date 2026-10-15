@@ -282,9 +282,11 @@ export interface WorktreeConfig {
    * - `{executionId}`: the first 8 characters of the execution ID
    *
    * A token that renders empty is dropped together with one adjacent separator
-   * (`-`, `_`, `.` or `/`). When the rendered name is already a branch, `-2`,
-   * `-3`, … is appended. With the "worktrunk" provider the template must start
-   * with `{prefix}/`, which is how sudocode recognizes the worktrees it manages.
+   * (`-`, `_`, `.` or `/`). When the rendered name is already a branch, or
+   * another execution is creating it, `-2`, `-3`, … is appended. A rendered
+   * name git's ref rules reject fails execution creation. With the "worktrunk"
+   * provider the template must start with `{prefix}/`, which is how sudocode
+   * recognizes the worktrees it manages.
    */
   branchTemplate: string;
   /** Cleanup orphaned worktrees on server startup (default: false) */

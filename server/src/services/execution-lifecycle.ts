@@ -23,6 +23,11 @@ import {
   renderBranchTemplate,
 } from "../execution/worktree/config.js";
 import { createExecution, getExecution } from "./executions.js";
+import {
+  WorktreeError,
+  WorktreeErrorCode,
+  type WorktreeCreateParams,
+} from "../execution/worktree/types.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -185,28 +190,18 @@ export class ExecutionLifecycleService {
     // Generate execution ID
     const executionId = randomUUID();
 
-    // Determine branch name based on autoCreateBranches setting
-    let branchName: string;
-    if (config.autoCreateBranches) {
-      // Generate branch name from worktree.branchTemplate
-      // (default: {prefix}/{executionId}/{title})
-      const renderedName = renderBranchTemplate(config.branchTemplate, {
-        prefix: config.branchPrefix,
-        issueId,
-        externalId: sanitizeForBranchName(params.issueExternalId ?? ""),
-        title: sanitizeForBranchName(issueTitle),
-        executionId: executionId.substring(0, 8),
-      });
-
-      // Handle branch name collision by appending -N suffix
-      branchName = renderedName;
-      for (let suffix = 2; branches.includes(branchName); suffix++) {
-        branchName = `${renderedName}-${suffix}`;
-      }
-    } else {
-      // Use target branch directly when not auto-creating branches
-      branchName = targetBranch;
-    }
+    // Branch name from worktree.branchTemplate
+    // (default: {prefix}/{executionId}/{title}), or the target branch itself
+    // when not auto-creating branches
+    const renderedName = config.autoCreateBranches
+      ? renderBranchTemplate(config.branchTemplate, {
+          prefix: config.branchPrefix,
+          issueId,
+          externalId: sanitizeForBranchName(params.issueExternalId ?? ""),
+          title: sanitizeForBranchName(issueTitle),
+          executionId: executionId.substring(0, 8),
+        })
+      : targetBranch;
 
     // Worktree path: {repoPath}/{worktreeStoragePath}/{execution-id} with the
     // "git" provider; wt's worktree-path template decides with "worktrunk"
@@ -216,6 +211,7 @@ export class ExecutionLifecycleService {
         : path.join(repoPath, config.worktreeStoragePath, executionId);
 
     let worktreePath: string | undefined;
+    let branchName = renderedName;
 
     try {
       // Step 1: Capture current commit before creating worktree
@@ -237,13 +233,20 @@ export class ExecutionLifecycleService {
       }
 
       // Step 2: Create worktree
-      worktreePath = await this.worktreeManager.createWorktree({
-        repoPath,
-        branchName,
-        worktreePath: requestedPath,
-        baseBranch: targetBranch,
-        createBranch: config.autoCreateBranches,
-      });
+      if (config.autoCreateBranches) {
+        ({ worktreePath, branchName } = await this.createWorktreeOnFreeBranch(
+          renderedName,
+          { repoPath, worktreePath: requestedPath, baseBranch: targetBranch }
+        ));
+      } else {
+        worktreePath = await this.worktreeManager.createWorktree({
+          repoPath,
+          branchName,
+          worktreePath: requestedPath,
+          baseBranch: targetBranch,
+          createBranch: false,
+        });
+      }
 
       // Step 3: Create execution record in database
       const execution = createExecution(this.db, {
@@ -281,6 +284,44 @@ export class ExecutionLifecycleService {
 
       // Re-throw the original error
       throw error;
+    }
+  }
+
+  /**
+   * Create a worktree on a new branch named `renderedName`, or on its first
+   * free `-2`, `-3`, … suffix. Names this process is still creating are
+   * reserved, so concurrent executions rendering the same name get distinct
+   * branches; a name that already exists is skipped.
+   */
+  private async createWorktreeOnFreeBranch(
+    renderedName: string,
+    params: Omit<WorktreeCreateParams, "branchName" | "createBranch">
+  ): Promise<{ worktreePath: string; branchName: string }> {
+    const reserved = reservedBranchNames(params.repoPath);
+    for (let suffix = 1; ; suffix++) {
+      const branchName =
+        suffix === 1 ? renderedName : `${renderedName}-${suffix}`;
+      if (reserved.has(branchName)) continue;
+
+      reserved.add(branchName);
+      try {
+        const worktreePath = await this.worktreeManager.createWorktree({
+          ...params,
+          branchName,
+          createBranch: true,
+        });
+        return { worktreePath, branchName };
+      } catch (error) {
+        if (
+          error instanceof WorktreeError &&
+          error.code === WorktreeErrorCode.BRANCH_EXISTS
+        ) {
+          continue;
+        }
+        throw error;
+      } finally {
+        reserved.delete(branchName);
+      }
     }
   }
 
@@ -516,16 +557,7 @@ export class ExecutionLifecycleService {
     // Generate branch name: {branchPrefix}/workflow/{workflowId-8-chars}/{sanitized-title}
     const sanitizedTitle = sanitizeForBranchName(workflowTitle);
     const workflowIdShort = workflowId.replace("wf-", "").substring(0, 8);
-    let branchName = `${config.branchPrefix}/workflow/${workflowIdShort}/${sanitizedTitle}`;
-
-    // Handle branch name collision by appending -N suffix
-    let suffix = 1;
-    let finalBranchName = branchName;
-    while (branches.includes(finalBranchName)) {
-      suffix++;
-      finalBranchName = `${branchName}-${suffix}`;
-    }
-    branchName = finalBranchName;
+    const renderedName = `${config.branchPrefix}/workflow/${workflowIdShort}/${sanitizedTitle}`;
 
     // Worktree path: {repoPath}/{worktreeStoragePath}/workflow-{workflowId} with
     // the "git" provider; wt's worktree-path template decides with "worktrunk"
@@ -534,15 +566,14 @@ export class ExecutionLifecycleService {
         ? undefined
         : path.join(repoPath, config.worktreeStoragePath, `workflow-${workflowId}`);
 
-    // Create the worktree
+    // Create the worktree, on a new branch with a -N suffix if the name is taken
     try {
-      const worktreePath = await this.worktreeManager.createWorktree({
-        repoPath,
-        branchName,
-        worktreePath: requestedPath,
-        baseBranch,
-        createBranch: true, // Always create a new branch for workflows
-      });
+      const { worktreePath, branchName } =
+        await this.createWorktreeOnFreeBranch(renderedName, {
+          repoPath,
+          worktreePath: requestedPath,
+          baseBranch,
+        });
 
       console.log(
         `[ExecutionLifecycle] Created workflow worktree: ${worktreePath} (branch: ${branchName})`
@@ -560,6 +591,18 @@ export class ExecutionLifecycleService {
       throw error;
     }
   }
+}
+
+/**
+ * Branch names being created in each repository by this process
+ */
+const reservedBranchNamesByRepo = new Map<string, Set<string>>();
+
+function reservedBranchNames(repoPath: string): Set<string> {
+  const key = canonicalWorktreePath(repoPath);
+  const reserved = reservedBranchNamesByRepo.get(key) ?? new Set<string>();
+  reservedBranchNamesByRepo.set(key, reserved);
+  return reserved;
 }
 
 /**

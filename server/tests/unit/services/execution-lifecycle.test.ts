@@ -611,31 +611,6 @@ describe("ExecutionLifecycleService", () => {
       ).rejects.toThrow("Cannot reuse worktree: path does not exist");
     });
 
-    it("should handle branch name collision with suffix", async () => {
-      // Branch format is: {prefix}/workflow/{workflowId without 'wf-' prefix, first 8 chars}/{sanitized-title}
-      // For workflowId "wf-12345678", it becomes "sudocode/workflow/12345678/my-test-workflow"
-      const mockWorktreeManager = createMockWorktreeManager({
-        branches: ["main", "sudocode/workflow/12345678/my-test-workflow"],
-      });
-
-      const service = new ExecutionLifecycleService(
-        db,
-        testDir,
-        mockWorktreeManager
-      );
-
-      const result = await service.createWorkflowWorktree({
-        workflowId: "wf-12345678",
-        workflowTitle: "My Test Workflow",
-        baseBranch: "main",
-        repoPath: testDir,
-      });
-
-      // Should have collision suffix (-2) since base branch exists
-      // Collision detection starts at suffix=1 and checks if branch exists before incrementing
-      expect(result.branchName.endsWith("-2")).toBeTruthy();
-    });
-
     it("should throw error for invalid repo path", async () => {
       const mockWorktreeManager = createMockWorktreeManager();
       // Override isValidRepo to return false

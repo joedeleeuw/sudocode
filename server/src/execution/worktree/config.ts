@@ -8,6 +8,7 @@
  * @module execution/worktree/config
  */
 
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '@sudocode-ai/cli/dist/config.js';
@@ -223,6 +224,8 @@ function validateBranchTemplate(
  * @param template - Validated `branchTemplate`
  * @param values - Branch-safe value for every token
  * @returns Branch name
+ * @throws Error naming the template and the rendered name when git's ref
+ *   rules (`git check-ref-format --branch`) reject it
  */
 export function renderBranchTemplate(
   template: string,
@@ -238,10 +241,21 @@ export function renderBranchTemplate(
     template
   );
 
-  return withoutEmpty.replace(
+  const branchName = withoutEmpty.replace(
     TEMPLATE_TOKEN_PATTERN,
     (_token, name: BranchTemplateToken) => values[name]
   );
+
+  try {
+    execFileSync('git', ['check-ref-format', '--branch', branchName], {
+      stdio: 'ignore',
+    });
+  } catch {
+    throw new Error(
+      `worktree.branchTemplate ${JSON.stringify(template)} rendered ${JSON.stringify(branchName)}, which git rejects as a branch name`
+    );
+  }
+  return branchName;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   type ExecutorWrapper,
 } from "../execution/executors/executor-factory.js";
 import { AcpExecutorWrapper } from "../execution/executors/acp-executor-wrapper.js";
+import { checkAgentConfig } from "../execution/executors/agent-config-handlers.js";
 import type { AgentType } from "@sudocode-ai/types/agents";
 import { PromptResolver } from "./prompt-resolver.js";
 import { getIssueById } from "./issues.js";
@@ -223,6 +224,7 @@ export class ExecutionService {
     if (!prompt.trim()) {
       throw new Error("Prompt cannot be empty");
     }
+    checkAgentConfig(agentType, config);
 
     // 2. Build execution config with auto-injected MCP servers
     const mergedConfig = await this.buildExecutionConfig(agentType, config);
@@ -628,6 +630,32 @@ export class ExecutionService {
 
     const hasWorktree = !!prevExecution.worktree_path;
 
+    // Default to 'claude-code' if agent_type is null (for backwards compatibility)
+    const agentType = (prevExecution.agent_type || "claude-code") as AgentType;
+
+    // Parent config with any overrides (e.g., for skip-all-permissions),
+    // agentConfig merged key by key; checked before anything is created
+    const parentConfigForExecutor = prevExecution.config
+      ? JSON.parse(prevExecution.config)
+      : {};
+    const overridesForExecutor = options?.configOverrides || {};
+    const mergedAgentConfigForExecutor =
+      parentConfigForExecutor.agentConfig || overridesForExecutor.agentConfig
+        ? {
+            ...(parentConfigForExecutor.agentConfig || {}),
+            ...((overridesForExecutor.agentConfig as Record<string, unknown>) ||
+              {}),
+          }
+        : undefined;
+    const parsedConfig = {
+      ...parentConfigForExecutor,
+      ...overridesForExecutor,
+      ...(mergedAgentConfigForExecutor
+        ? { agentConfig: mergedAgentConfigForExecutor }
+        : {}),
+    };
+    checkAgentConfig(agentType, parsedConfig);
+
     // For worktree executions, check if worktree still exists on filesystem, recreate if needed
     if (hasWorktree && this.lifecycleService) {
       const fs = await import("fs");
@@ -677,38 +705,10 @@ ${feedback}`;
     }
 
     // 3. Create new execution record that references previous execution
-    // Default to 'claude-code' if agent_type is null (for backwards compatibility)
-    const agentType = (prevExecution.agent_type || "claude-code") as AgentType;
-
     // Determine working directory: worktree path if available, otherwise repo path (local mode)
     const workDir = hasWorktree ? prevExecution.worktree_path! : this.repoPath;
 
     const newExecutionId = randomUUID();
-    // Merge config: parent config + any overrides (for features like skip-all-permissions)
-    // Deep merge agentConfig to preserve existing settings while applying overrides
-    let mergedConfigForStorage = prevExecution.config;
-    if (options?.configOverrides) {
-      const parentConfig = prevExecution.config
-        ? JSON.parse(prevExecution.config)
-        : {};
-      const overrides = options.configOverrides;
-
-      // Deep merge agentConfig if both parent and overrides have it
-      const mergedAgentConfig =
-        parentConfig.agentConfig || overrides.agentConfig
-          ? {
-              ...(parentConfig.agentConfig || {}),
-              ...((overrides.agentConfig as Record<string, unknown>) || {}),
-            }
-          : undefined;
-
-      mergedConfigForStorage = JSON.stringify({
-        ...parentConfig,
-        ...overrides,
-        ...(mergedAgentConfig ? { agentConfig: mergedAgentConfig } : {}),
-      });
-    }
-
     const newExecution = createExecution(this.db, {
       id: newExecutionId,
       issue_id: prevExecution.issue_id,
@@ -717,7 +717,9 @@ ${feedback}`;
       target_branch: prevExecution.target_branch,
       branch_name: prevExecution.branch_name,
       worktree_path: prevExecution.worktree_path || undefined, // Reuse same worktree (undefined for local)
-      config: mergedConfigForStorage || undefined, // Preserve config with any overrides
+      config: options?.configOverrides
+        ? JSON.stringify(parsedConfig)
+        : prevExecution.config || undefined, // Preserve config with any overrides
       parent_execution_id: executionId, // Link to parent execution for follow-up chain
       prompt: followUpPrompt, // Store original (unexpanded) follow-up prompt
     });
@@ -753,30 +755,6 @@ ${feedback}`;
         errors
       );
     }
-
-    // Parse config to get model and other settings
-    // This is done early so we can pass it to the executor
-    // Merge any config overrides provided (e.g., for skip-all-permissions)
-    // Deep merge agentConfig to preserve existing settings
-    const parentConfigForExecutor = prevExecution.config
-      ? JSON.parse(prevExecution.config)
-      : {};
-    const overridesForExecutor = options?.configOverrides || {};
-    const mergedAgentConfigForExecutor =
-      parentConfigForExecutor.agentConfig || overridesForExecutor.agentConfig
-        ? {
-            ...(parentConfigForExecutor.agentConfig || {}),
-            ...((overridesForExecutor.agentConfig as Record<string, unknown>) ||
-              {}),
-          }
-        : undefined;
-    const parsedConfig = {
-      ...parentConfigForExecutor,
-      ...overridesForExecutor,
-      ...(mergedAgentConfigForExecutor
-        ? { agentConfig: mergedAgentConfigForExecutor }
-        : {}),
-    };
 
     // 4. Use executor wrapper with session resumption
     // IMPORTANT: Pass the full config from parent execution to preserve mcpServers,

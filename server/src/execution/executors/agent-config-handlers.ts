@@ -93,6 +93,14 @@ export interface AgentConfigHandler {
   ): ProcessedAgentConfig;
 
   /**
+   * Reject config this agent cannot launch with. Runs when an execution is
+   * requested, before its record or worktree exists.
+   *
+   * @throws AgentConfigValidationError
+   */
+  checkConfig?(rawConfig: RawAgentConfig): void;
+
+  /**
    * Apply any agent-specific setup (e.g., dynamic registration)
    * Called before spawning the agent
    */
@@ -281,38 +289,6 @@ export const geminiHandler: AgentConfigHandler = {
 // =============================================================================
 
 /**
- * Check configOverrides from untrusted execution config: a map of dotted
- * config keys to string values
- */
-function parseConfigOverrides(
-  configOverrides: unknown
-): CodexOptions["configOverrides"] {
-  if (configOverrides === undefined) return undefined;
-  const entries =
-    typeof configOverrides === "object" &&
-    configOverrides !== null &&
-    !Array.isArray(configOverrides)
-      ? Object.entries(configOverrides)
-      : null;
-  const invalid =
-    entries === null
-      ? ["configOverrides must be an object of key to string value"]
-      : entries
-          .filter(
-            ([key, value]) =>
-              key === "" || key.includes("=") || typeof value !== "string"
-          )
-          .map(
-            ([key]) =>
-              `configOverrides[${JSON.stringify(key)}] must be a string, under a non-empty key without "="`
-          );
-  if (invalid.length > 0) {
-    throw new AgentConfigValidationError("codex", invalid);
-  }
-  return configOverrides as Record<string, string>;
-}
-
-/**
  * Configuration handler for OpenAI Codex agent
  *
  * Handles:
@@ -321,6 +297,33 @@ function parseConfigOverrides(
  * - fullAuto mode (convenience alias for workspace-write + on-request)
  */
 export const codexHandler: AgentConfigHandler = {
+  checkConfig(rawConfig: RawAgentConfig): void {
+    const configOverrides: unknown = (rawConfig.agentConfig || rawConfig)
+      .configOverrides;
+    if (configOverrides === undefined) return;
+    const entries =
+      typeof configOverrides === "object" &&
+      configOverrides !== null &&
+      !Array.isArray(configOverrides)
+        ? Object.entries(configOverrides)
+        : null;
+    const invalid =
+      entries === null
+        ? ["configOverrides must be an object of key to string value"]
+        : entries
+            .filter(
+              ([key, value]) =>
+                key === "" || key.includes("=") || typeof value !== "string"
+            )
+            .map(
+              ([key]) =>
+                `configOverrides[${JSON.stringify(key)}] must be a string, under a non-empty key without "="`
+            );
+    if (invalid.length > 0) {
+      throw new AgentConfigValidationError("codex", invalid);
+    }
+  },
+
   processConfig(
     rawConfig: RawAgentConfig,
     _context: AgentConfigContext
@@ -350,7 +353,6 @@ export const codexHandler: AgentConfigHandler = {
     _context: AgentConfigContext
   ): void {
     const codexConfig: CodexOptions = rawConfig.agentConfig || rawConfig;
-    const configOverrides = parseConfigOverrides(codexConfig.configOverrides);
     const model = rawConfig.model || rawConfig.agentConfig?.model;
 
     // Determine approval policy
@@ -382,7 +384,7 @@ export const codexHandler: AgentConfigHandler = {
       approval_policy: approvalPolicy,
       ...(sandbox && { sandbox_mode: sandbox }),
       ...(model && { model }),
-      ...configOverrides,
+      ...codexConfig.configOverrides,
     };
     const args = [
       "@zed-industries/codex-acp",
@@ -535,6 +537,19 @@ const handlers: Record<string, AgentConfigHandler> = {
  */
 export function getAgentConfigHandler(agentType: string): AgentConfigHandler {
   return handlers[agentType] || defaultHandler;
+}
+
+/**
+ * Reject agent configuration the agent cannot launch with, before an
+ * execution record or worktree is created for it
+ *
+ * @throws AgentConfigValidationError
+ */
+export function checkAgentConfig(
+  agentType: string,
+  rawConfig: RawAgentConfig
+): void {
+  getAgentConfigHandler(agentType).checkConfig?.(rawConfig);
 }
 
 /**

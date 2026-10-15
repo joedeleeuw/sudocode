@@ -278,7 +278,7 @@ Execution branches are named by `branchTemplate`, by default `{prefix}/{executio
 
 Run `sudocode init-merge-driver` once in any worktree to merge `.sudocode/*.jsonl` entity-by-entity; worktrees share the setting.
 
-Codex executions launch `codex-acp` with Codex config overrides, each passed as `-c key=value`: `approval_policy` and `sandbox_mode` from the agent config's `askForApproval`, `sandbox` or `fullAuto` (or `dangerouslySkipPermissions`), `model` from the execution's `model`, then every entry of the agent config's `configOverrides`, which win on conflict. For example, `"agentConfig": { "configOverrides": { "model_reasoning_effort": "high", "sandbox_workspace_write.writable_roots": "[\"/path/to/repo/.git\"]" } }`. Values are parsed by Codex as TOML, or used as plain strings when they are not valid TOML.
+Codex executions launch `codex-acp` with Codex config overrides, each passed as `-c key=value`: `approval_policy` and `sandbox_mode` from the agent config's `askForApproval`, `sandbox` or `fullAuto` (or `dangerouslySkipPermissions`), `model` from the execution's `model`, then every entry of the agent config's `configOverrides`, which win on conflict. For example, `"agentConfig": { "configOverrides": { "model_reasoning_effort": "high", "sandbox_workspace_write.writable_roots": "[\"/path/to/repo/.git\"]" } }`. Values are parsed by Codex as TOML, or used as plain strings when they are not valid TOML. A `configOverrides` that is not an object of string values under non-empty keys without `=` is rejected with a 400 before the execution or its worktree is created.
 
 ## Development Flow
 

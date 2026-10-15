@@ -29,7 +29,11 @@ import {
   serializeCoalescedUpdate,
   type UserMessageComplete,
 } from "../output/coalesced-types.js";
-import { updateExecution, getExecution } from "../../services/executions.js";
+import {
+  updateExecution,
+  getExecution,
+  type UpdateExecutionInput,
+} from "../../services/executions.js";
 import {
   broadcastExecutionUpdate,
   broadcastSessionEvent,
@@ -1498,6 +1502,22 @@ export class AcpExecutorWrapper {
   }
 
   /**
+   * Write the claimed terminal status. If the write fails the claim is
+   * released, so a retry can still persist a terminal status.
+   */
+  private writeTerminalStatus(
+    executionId: string,
+    input: UpdateExecutionInput
+  ): void {
+    try {
+      updateExecution(this.db, executionId, input);
+    } catch (error) {
+      this.finalizedExecutions.delete(executionId);
+      throw error;
+    }
+  }
+
+  /**
    * Clear the idle timeout for a persistent session
    */
   private clearIdleTimeout(executionId: string): void {
@@ -1607,7 +1627,7 @@ export class AcpExecutorWrapper {
     }
 
     // Update execution status
-    updateExecution(this.db, executionId, {
+    this.writeTerminalStatus(executionId, {
       after_commit: afterCommit,
       files_changed: filesChangedJson,
       status: "completed",
@@ -1668,7 +1688,7 @@ export class AcpExecutorWrapper {
     }
 
     // Update execution status
-    updateExecution(this.db, executionId, {
+    this.writeTerminalStatus(executionId, {
       status: "failed",
       completed_at: new Date().toISOString(),
       error_message: error.message,

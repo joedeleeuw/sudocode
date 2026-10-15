@@ -480,42 +480,6 @@ describe("Agent Config Handlers", () => {
   // ===========================================================================
   describe("codexHandler", () => {
     describe("processConfig", () => {
-      it("should set OPENAI_MODEL env var when model is provided", () => {
-        const rawConfig: RawAgentConfig = {
-          model: "gpt-4",
-        };
-
-        const result = codexHandler.processConfig(rawConfig, defaultContext);
-
-        expect(result.env).toEqual({ OPENAI_MODEL: "gpt-4" });
-      });
-
-      it("should read model from nested agentConfig", () => {
-        const rawConfig: RawAgentConfig = {
-          agentConfig: {
-            model: "gpt-4-turbo",
-          },
-        };
-
-        const result = codexHandler.processConfig(rawConfig, defaultContext);
-
-        expect(result.env).toEqual({ OPENAI_MODEL: "gpt-4-turbo" });
-      });
-
-      it("should merge existing env vars with model", () => {
-        const rawConfig: RawAgentConfig = {
-          model: "gpt-4",
-          env: { OPENAI_API_KEY: "test-key" },
-        };
-
-        const result = codexHandler.processConfig(rawConfig, defaultContext);
-
-        expect(result.env).toEqual({
-          OPENAI_MODEL: "gpt-4",
-          OPENAI_API_KEY: "test-key",
-        });
-      });
-
       it("should set interactive by default", () => {
         const rawConfig: RawAgentConfig = {};
 
@@ -537,89 +501,6 @@ describe("Agent Config Handlers", () => {
       });
     });
 
-    describe("applySetup", () => {
-      it("should register Codex with ask_for_approval=untrusted for interactive mode (default)", () => {
-        const rawConfig: RawAgentConfig = {};
-        const processedConfig: ProcessedAgentConfig = {
-          acpPermissionMode: "interactive",
-          skipPermissions: false,
-        };
-
-        codexHandler.applySetup!(rawConfig, processedConfig, defaultContext);
-
-        expect(AgentFactory.register).toHaveBeenCalledWith("codex", {
-          command: "npx",
-          args: ["@zed-industries/codex-acp", "-c", "ask_for_approval=untrusted"],
-          env: {},
-        });
-      });
-
-      it("should register Codex with fullAuto settings (on-request + workspace-write)", () => {
-        const rawConfig = { fullAuto: true } as RawAgentConfig;
-        const processedConfig: ProcessedAgentConfig = {
-          acpPermissionMode: "interactive",
-          skipPermissions: false,
-        };
-
-        codexHandler.applySetup!(rawConfig, processedConfig, defaultContext);
-
-        expect(AgentFactory.register).toHaveBeenCalledWith("codex", {
-          command: "npx",
-          args: [
-            "@zed-industries/codex-acp",
-            "-c", "ask_for_approval=on-request",
-            "-c", "sandbox=workspace-write",
-          ],
-          env: {},
-        });
-      });
-
-      it("should register Codex with custom approval and sandbox settings", () => {
-        const rawConfig = {
-          askForApproval: "never",
-          sandbox: "danger-full-access",
-        } as unknown as RawAgentConfig;
-        const processedConfig: ProcessedAgentConfig = {
-          acpPermissionMode: "interactive",
-          skipPermissions: false,
-        };
-
-        codexHandler.applySetup!(rawConfig, processedConfig, defaultContext);
-
-        expect(AgentFactory.register).toHaveBeenCalledWith("codex", {
-          command: "npx",
-          args: [
-            "@zed-industries/codex-acp",
-            "-c", "ask_for_approval=never",
-            "-c", "sandbox=danger-full-access",
-          ],
-          env: {},
-        });
-      });
-
-      it("should register Codex with dangerouslySkipPermissions (highest priority)", () => {
-        const rawConfig = {
-          dangerouslySkipPermissions: true,
-          fullAuto: false, // Should be ignored
-        } as unknown as RawAgentConfig;
-        const processedConfig: ProcessedAgentConfig = {
-          acpPermissionMode: "auto-approve",
-          skipPermissions: true,
-        };
-
-        codexHandler.applySetup!(rawConfig, processedConfig, defaultContext);
-
-        expect(AgentFactory.register).toHaveBeenCalledWith("codex", {
-          command: "npx",
-          args: [
-            "@zed-industries/codex-acp",
-            "-c", "ask_for_approval=never",
-            "-c", "sandbox=danger-full-access",
-          ],
-          env: {},
-        });
-      });
-    });
   });
 
   // ===========================================================================

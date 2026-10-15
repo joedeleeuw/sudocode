@@ -289,9 +289,11 @@ export class ExecutionLifecycleService {
 
   /**
    * Create a worktree on a new branch named `renderedName`, or on its first
-   * free `-2`, `-3`, … suffix. Names this process is still creating are
-   * reserved, so concurrent executions rendering the same name get distinct
-   * branches; a name that already exists is skipped.
+   * free `-2`, `-3`, … suffix. Names this process is still creating in
+   * the same checkout are reserved, so concurrent executions rendering the
+   * same name get distinct branches; a name that already exists is skipped.
+   * A branch another process creates after that check is not retried: the
+   * creation fails.
    */
   private async createWorktreeOnFreeBranch(
     renderedName: string,

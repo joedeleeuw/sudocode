@@ -208,7 +208,7 @@ export interface CodexConfig extends BaseAgentConfig {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Approval policy */
   askForApproval?: "untrusted" | "on-failure" | "on-request" | "never";
-  /** Shortcut combining workspace-write sandbox + on-failure approvals */
+  /** Shortcut combining workspace-write sandbox + on-request approvals */
   fullAuto?: boolean;
   /** Allow execution outside Git repositories */
   skipGitRepoCheck?: boolean;

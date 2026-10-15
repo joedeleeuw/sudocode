@@ -283,7 +283,9 @@ export interface WorktreeConfig {
    *
    * A token that renders empty is dropped together with one adjacent separator
    * (`-`, `_`, `.` or `/`). When the rendered name is already a branch, or
-   * another execution is creating it, `-2`, `-3`, … is appended. A rendered
+   * another execution in this server process is creating it in the same
+   * checkout, `-2`, `-3`, … is appended; a branch another process creates
+   * after that check fails execution creation. A rendered
    * name git's ref rules reject fails execution creation. With the "worktrunk"
    * provider the template must start with `{prefix}/`, which is how sudocode
    * recognizes the worktrees it manages.

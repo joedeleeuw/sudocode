@@ -11,6 +11,8 @@ not npm: dotfiles `config/agents/clis.json` pins the meta-package tarball.
   remote, else the first remote in `.git/config`. Its hook approval is stored under
   `github.com/joedeleeuw/sudocode`.
 - Fork work branches from the newest `release/v*` branch. `main` tracks upstream.
+- Create worktrees with `command wt -C <a fork worktree> switch --create …`. The primary checkout
+  sits on upstream `main`, which has no `.config/wt.toml`, so wt run there skips the pre-start copy.
 
 ## Global hooks
 

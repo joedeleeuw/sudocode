@@ -24,7 +24,7 @@ export function repositoryRoot(directory: string): string {
   }
   if (revParse.status !== 0) {
     throw new ProjectNotFoundError(
-      `${directory} is not inside a git repository. A sudocode project lives at the root of a git repository.` +
+      `${directory} is not inside a git working tree. A sudocode project lives at the root of a git working tree.` +
         projectsBelow(directory)
     );
   }

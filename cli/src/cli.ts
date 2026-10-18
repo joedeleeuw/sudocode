@@ -605,7 +605,7 @@ plugin
   .description("List available integration plugins")
   .option("-a, --all", "Show all plugins including not installed")
   .action(async (options) => {
-    await handlePluginList(await getContext(), options);
+    await handlePluginList({ jsonOutput }, options);
   });
 
 plugin
@@ -613,7 +613,7 @@ plugin
   .description("Install an integration plugin")
   .option("-g, --global", "Install globally")
   .action(async (name, options) => {
-    await handlePluginInstall(await getContext(), name, options);
+    await handlePluginInstall({ jsonOutput }, name, options);
   });
 
 plugin
@@ -621,14 +621,14 @@ plugin
   .description("Uninstall an integration plugin")
   .option("-g, --global", "Uninstall globally")
   .action(async (name, options) => {
-    await handlePluginUninstall(await getContext(), name, options);
+    await handlePluginUninstall({ jsonOutput }, name, options);
   });
 
 plugin
   .command("status")
   .description("Show status of installed plugins")
   .action(async () => {
-    await handlePluginStatus(await getContext());
+    await handlePluginStatus({ jsonOutput });
   });
 
 plugin

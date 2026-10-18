@@ -60,7 +60,9 @@ import {
   handleInitMergeDriver,
   handleRemoveMergeDriver,
 } from "./cli/merge-commands.js";
-import { handleAuthClearCommand, handleAuthStatusCommand, handleAuthClaudeCommand } from "./cli/auth-commands.js";
+import { handleAuthClear } from "./auth/clear.js";
+import { showAuthStatus } from "./auth/status.js";
+import { handleClaudeAuth } from "./auth/claude.js";
 import {
   handleRemoteSpawn,
   handleRemoteConfig,
@@ -98,6 +100,8 @@ function initDB(): Database.Database {
       throw error;
     }
     dbPath = path.join(outputDir, "cache.db");
+  } else {
+    outputDir = path.dirname(path.resolve(dbPath));
   }
 
   try {
@@ -139,7 +143,7 @@ program
   .name("sudocode")
   .description("sudocode - git-native agentic context management")
   .version(VERSION)
-  .option("--db <path>", "Database path (default: auto-discover)")
+  .option("--db <path>", "Database path (default: .sudocode/cache.db at the git repository root)")
   .option("--json", "Output in JSON format")
   .hook("preAction", (thisCommand: Command) => {
     // Get global options
@@ -544,7 +548,6 @@ program
   .option("--dry-run", "Show what would be done without making changes")
   .option("--verbose", "Show detailed resolution information")
   .action(async (options) => {
-    initDB();
     await handleResolveConflicts(await getContext(), options);
   });
 
@@ -685,7 +688,7 @@ auth
   .option("-f, --force", "Overwrite existing token without confirmation")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClaudeCommand(await getContext(), options);
+    await handleClaudeAuth(options);
   });
 
 auth
@@ -693,7 +696,7 @@ auth
   .description("Check authentication status for all services")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthStatusCommand(await getContext(), options);
+    await showAuthStatus({ json: options.json || jsonOutput });
   });
 
 auth
@@ -702,7 +705,7 @@ auth
   .option("-f, --force", "Skip confirmation prompt")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClearCommand(await getContext(), options);
+    await handleAuthClear(options);
   });
 
 // ============================================================================

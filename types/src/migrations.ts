@@ -179,7 +179,7 @@ const MIGRATIONS: Migration[] = [
       // Rename new table
       db.exec(`ALTER TABLE execution_logs_new RENAME TO execution_logs;`);
 
-      console.log("  ✓ Added normalized_entry column to execution_logs table");
+      console.error("  ✓ Added normalized_entry column to execution_logs table");
     },
     down: (db: Database.Database) => {
       // Rollback: remove normalized_entry column
@@ -332,7 +332,7 @@ const MIGRATIONS: Migration[] = [
       // Re-enable foreign keys
       db.exec(`PRAGMA foreign_keys = ON;`);
 
-      console.log(
+      console.error(
         "  ✓ Removed agent_type constraints (nullable, no default, validation handled by application)"
       );
     },
@@ -405,7 +405,7 @@ const MIGRATIONS: Migration[] = [
     version: 4,
     name: "add-external-links-column",
     up: (db: Database.Database) => {
-      console.log(
+      console.error(
         "  [migration-4] Starting add-external-links-column migration"
       );
 
@@ -416,7 +416,7 @@ const MIGRATIONS: Migration[] = [
         )
         .all() as Array<{ name: string }>;
 
-      console.log(
+      console.error(
         `  [migration-4] specs table exists: ${specsTables.length > 0}`
       );
 
@@ -428,13 +428,13 @@ const MIGRATIONS: Migration[] = [
         const specsHasColumn = specsInfo.some(
           (col) => col.name === "external_links"
         );
-        console.log(
+        console.error(
           `  [migration-4] specs.external_links column exists: ${specsHasColumn}`
         );
 
         if (!specsHasColumn) {
           db.exec(`ALTER TABLE specs ADD COLUMN external_links TEXT;`);
-          console.log("  ✓ Added external_links column to specs table");
+          console.error("  ✓ Added external_links column to specs table");
         }
       }
 
@@ -445,7 +445,7 @@ const MIGRATIONS: Migration[] = [
         )
         .all() as Array<{ name: string }>;
 
-      console.log(
+      console.error(
         `  [migration-4] issues table exists: ${issuesTables.length > 0}`
       );
 
@@ -457,23 +457,23 @@ const MIGRATIONS: Migration[] = [
         const issuesHasColumn = issuesInfo.some(
           (col) => col.name === "external_links"
         );
-        console.log(
+        console.error(
           `  [migration-4] issues.external_links column exists: ${issuesHasColumn}`
         );
 
         if (!issuesHasColumn) {
           db.exec(`ALTER TABLE issues ADD COLUMN external_links TEXT;`);
-          console.log("  ✓ Added external_links column to issues table");
+          console.error("  ✓ Added external_links column to issues table");
         }
       }
 
-      console.log("  [migration-4] Migration complete");
+      console.error("  [migration-4] Migration complete");
     },
     down: (db: Database.Database) => {
       // SQLite doesn't support DROP COLUMN in older versions
       // For rollback, we'd need to recreate the tables without the column
       // This is a non-destructive migration, so rollback is optional
-      console.log(
+      console.error(
         "  Note: external_links column cannot be removed (SQLite limitation)"
       );
     },
@@ -559,7 +559,7 @@ const MIGRATIONS: Migration[] = [
 
       db.exec(`PRAGMA foreign_keys = ON;`);
 
-      console.log(
+      console.error(
         "  ✓ Made from_id/from_uuid nullable in issue_feedback"
       );
     },
@@ -616,7 +616,7 @@ const MIGRATIONS: Migration[] = [
 
       db.exec(`PRAGMA foreign_keys = ON;`);
 
-      console.log(
+      console.error(
         "  Note: Anonymous feedback (without from_id) was removed during rollback"
       );
     },
@@ -669,14 +669,14 @@ export function runMigrations(db: Database.Database): void {
     return;
   }
 
-  console.log(`Running ${pendingMigrations.length} pending migration(s)...`);
+  console.error(`Running ${pendingMigrations.length} pending migration(s)...`);
 
   for (const migration of pendingMigrations) {
-    console.log(`  Applying migration ${migration.version}: ${migration.name}`);
+    console.error(`  Applying migration ${migration.version}: ${migration.name}`);
     try {
       migration.up(db);
       recordMigration(db, migration);
-      console.log(`  ✓ Migration ${migration.version} applied successfully`);
+      console.error(`  ✓ Migration ${migration.version} applied successfully`);
     } catch (error) {
       console.error(`  ✗ Migration ${migration.version} failed:`, error);
       throw error;

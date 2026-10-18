@@ -23,13 +23,9 @@ npm install -g @sudocode-ai/cli @sudocode-ai/mcp
 
 ## Configuration
 
-**IMPORTANT**: Before using this MCP server, sudocode MUST be initialized in your project directory (`sudocode init`)
+**IMPORTANT**: A sudocode project lives at the root of a git repository. Run `sudocode init` in the repository once; it creates `.sudocode/` at the repository root from any subdirectory.
 
-### First-time setup:
-1. Navigate to your project root directory
-2. Run: \`sudocode init\`
-3. This creates the \`.sudocode/\` directory with necessary database files
-4. Verify setup: Check that \`.sudocode/cache.db\` exists
+Every CLI-backed tool accepts an optional `project`: an absolute path inside the git repository whose project to use. Without it, a tool uses the directory the server started in. A session started in a workspace that holds many repositories names the repository on each call.
 
 **Without initialization, all MCP tools will fail with errors.**
 
@@ -178,8 +174,7 @@ mcp/
 │       ├── feedback.ts
 │       ├── relationships.ts
 │       ├── references.ts
-│       ├── analytics.ts
-│       └── init.ts
+│       └── analytics.ts
 ├── tests/
 │   └── unit/               # Unit tests
 └── dist/                   # Built output
@@ -199,9 +194,9 @@ If you get "CLI not found" errors:
 
 If you get database errors:
 
-1. Run `sudocode init` in your project directory first
-2. Ensure the working directory is set correctly
-3. Check that `.sudocode/cache.db` exists
+1. Read the error: it names the directory the CLI looked in and lists the projects below it
+2. Pass `project` with the repository's absolute path, or start the server inside that repository
+3. Run `sudocode init` at the repository root if the repository has no project yet
 
 ### Permission Errors
 

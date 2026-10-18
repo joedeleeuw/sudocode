@@ -17,7 +17,10 @@ export function repositoryRoot(directory: string): string {
     encoding: "utf8",
   });
   if (revParse.error) {
-    throw revParse.error;
+    throw new Error(
+      `git is required to find the sudocode project: ${revParse.error.message}`,
+      { cause: revParse.error }
+    );
   }
   if (revParse.status !== 0) {
     throw new ProjectNotFoundError(

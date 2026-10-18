@@ -467,7 +467,7 @@ class SudocodeClient {
 ### Error Handling
 
 1. **CLI Not Found**: Return helpful error directing to installation
-2. **Invalid Database**: Suggest running `init` tool
+2. **No Project**: Return the CLI's error, which names the directory and lists the projects below it
 3. **Entity Not Found**: Return 404-style error with clear message
 4. **Validation Errors**: Parse CLI error output and return structured errors
 

@@ -19,6 +19,7 @@ import * as relationshipTools from "./tools/relationships.js";
 import * as feedbackTools from "./tools/feedback.js";
 import * as referenceTools from "./tools/references.js";
 import { SudocodeMCPServerConfig } from "./types.js";
+import { existsSync, statSync } from "fs";
 import { isAbsolute, join } from "path";
 import {
   type Scope,
@@ -103,7 +104,7 @@ export class SudocodeMCPServer {
 
     // Handle tool calls - route to CLI or API based on tool scope
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
+      const { name, arguments: args = {} } = request.params;
 
       // Get tool definition
       const tool = getToolByName(name);
@@ -298,6 +299,9 @@ sudocode is a git-native spec and issue management system designed for AI-assist
       throw new Error(
         `project must be an absolute path inside a git repository, got ${JSON.stringify(project)}`
       );
+    }
+    if (!existsSync(project) || !statSync(project).isDirectory()) {
+      throw new Error(`project ${project} is not a directory`);
     }
     const pinnedDatabase = this.config.dbPath ?? process.env.SUDOCODE_DB;
     if (pinnedDatabase) {

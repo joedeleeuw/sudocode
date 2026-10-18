@@ -120,6 +120,11 @@ const entryTargets = (manifest: Manifest) =>
     .filter((target) => !target.startsWith("node_modules/") && !target.includes("*"));
 
 const outputDirectory = mkdtempSync(path.join(tmpdir(), `sudocode-${releaseTag}-`));
+process.on("exit", (exitCode) => {
+  if (exitCode !== 0) {
+    console.error(`release tarballs kept in ${outputDirectory}`);
+  }
+});
 for (const [directory, manifest] of manifests) {
   const source = path.join(repositoryRoot, directory);
   const staging = path.join(outputDirectory, "staging", directory);
@@ -144,7 +149,7 @@ for (const [directory, manifest] of manifests) {
 }
 
 run("git", ["tag", "--annotate", releaseTag, "--message", releaseTag]);
-run("git", ["push", "--quiet", forkRemote, `release/${releaseTag}`, releaseTag]);
+run("git", ["push", "--atomic", "--quiet", forkRemote, `release/${releaseTag}`, releaseTag]);
 const tarballs = [...manifests.values()].map((manifest) => path.join(outputDirectory, tarballName(manifest)));
 const releaseUrl = run("gh", ["release", "create", releaseTag, "--repo", FORK_REPOSITORY, "--verify-tag", "--title", releaseTag, "--notes-file", notesPath, ...tarballs]);
 rmSync(outputDirectory, { recursive: true, force: true });

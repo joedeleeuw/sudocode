@@ -18,21 +18,17 @@ each new worktree, together with `node_modules`, as listed in `.worktreeinclude`
 ## Releases
 
 Run `node scripts/release-fork.ts 0.2.0-joe.N <notes.md>` from a clean checkout of the commit to
-release. It:
-- creates `release/v0.2.0-joe.N`;
-- versions every package, with the meta-package at `1.2.0-joe.N`;
-- rebuilds from empty `dist` directories;
-- packs tarballs whose sibling dependencies point at the release asset URLs, and fails if a tarball is
-  missing an entry point;
-- tags, pushes to `fork` and creates the GitHub release.
+release; it publishes the GitHub release that dotfiles pins. Then bump the dotfiles pin (`source`,
+`version`, `pinReason`) and install with `scripts/install-clis.sh --only sudocode`.
+`scripts/version.sh` and `scripts/publish.sh` are upstream's npm flow; the fork does not publish to
+npm.
 
-Then bump the dotfiles pin (`source`, `version`, `pinReason`) and install with
-`scripts/install-clis.sh --only sudocode`. `scripts/version.sh` and `scripts/publish.sh` are
-upstream's npm flow; the fork does not publish to npm.
+A failed release keeps its state. Before the push, delete the local `release/v0.2.0-joe.N` branch
+and `v0.2.0-joe.N` tag, fix the cause and rerun. After the push, the tag is published: run
+`gh release create v0.2.0-joe.N -R joedeleeuw/sudocode --verify-tag --notes-file <notes.md>` with the
+tarballs from the directory the script printed.
 
 ## Validation
 
 Smoke the built CLI (`node cli/dist/cli.js … --json`) and the MCP server (`node mcp/dist/index.js`
-over stdio) against real scratch git repositories. `npm test` runs the existing suites. The
-release base has the same environmental failures: the global hooks in temporary repositories, and a
-YAMLException in yaml-merge.
+over stdio) against real scratch git repositories. `npm test` runs the existing suites.

@@ -7,18 +7,13 @@ not npm: dotfiles `config/agents/clis.json` pins the meta-package tarball.
 
 - `fork` (github.com/joedeleeuw/sudocode over SSH) is the only push target. `upstream` is fetch-only
   and `sushi` is the GPU host's checkout.
-- In a new clone, run `git config checkout.defaultRemote fork`. worktrunk names a project after that
-  remote, else the first remote in `.git/config`. Its hook approval is stored under
-  `github.com/joedeleeuw/sudocode`.
 - Fork work branches from the newest `release/v*` branch. `main` tracks upstream.
-- Create worktrees with `command wt -C <a fork worktree> switch --create …`. The primary checkout
-  sits on upstream `main`, which has no `.config/wt.toml`, so wt run there skips the pre-start copy.
 
 ## Global hooks
 
 The user's global git hooks require a `.pre-commit-config.yaml`. This fork opts out with an untracked
-`.skip-global-hooks`, listed in `.git/info/exclude`. `.worktreeinclude` copies it into each new
-worktree, together with `node_modules`.
+`.skip-global-hooks`, listed in `.git/info/exclude`. The user-level worktrunk hook copies it into
+each new worktree, together with `node_modules`, as listed in `.worktreeinclude`.
 
 ## Releases
 

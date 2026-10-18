@@ -1,0 +1,2 @@
+[[pre-start]]
+dependencies = "wt step copy-ignored --require-include --from {{ base_worktree_path | default(default_branch) }}"

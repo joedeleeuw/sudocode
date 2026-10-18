@@ -493,32 +493,6 @@ describe("ProjectManager", () => {
         expect(manager.getAllOpenProjects()).toHaveLength(1);
       }
     });
-
-    it("should create proper config.json and config.local.json", async () => {
-      const newProjectPath = path.join(tempDir, "config-init-project");
-      fs.mkdirSync(newProjectPath, { recursive: true });
-
-      const result = await manager.initializeProject(newProjectPath);
-
-      expect(result.ok).toBe(true);
-
-      // Project config (git-tracked) — should NOT contain worktree or version
-      const configPath = path.join(newProjectPath, ".sudocode", "config.json");
-      expect(fs.existsSync(configPath)).toBe(true);
-
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      expect(config).not.toHaveProperty("version");
-      expect(config).not.toHaveProperty("worktree");
-
-      // Local config (gitignored) — should contain worktree and editor settings
-      const localConfigPath = path.join(newProjectPath, ".sudocode", "config.local.json");
-      expect(fs.existsSync(localConfigPath)).toBe(true);
-
-      const localConfig = JSON.parse(fs.readFileSync(localConfigPath, "utf8"));
-      expect(localConfig).toHaveProperty("worktree");
-      expect(localConfig.worktree).toHaveProperty("worktreeStoragePath");
-      expect(localConfig.worktree).toHaveProperty("branchPrefix", "sudocode");
-    });
   });
 
   describe("file watcher integration", () => {

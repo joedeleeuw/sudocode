@@ -26,7 +26,7 @@ interface ValidationResult {
  * Default worktree configuration
  */
 export const DEFAULT_WORKTREE_CONFIG: WorktreeConfig = {
-  provider: 'git',
+  provider: 'worktrunk',
   worktreeStoragePath: '.sudocode/worktrees',
   autoCreateBranches: true,
   autoDeleteBranches: false,

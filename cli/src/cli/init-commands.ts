@@ -112,16 +112,6 @@ export async function performInitialization(
   const localConfigPath = path.join(dir, LOCAL_CONFIG_FILE);
   if (!fs.existsSync(localConfigPath)) {
     const localConfig = {
-      worktree: {
-        provider: "git",
-        worktreeStoragePath: ".sudocode/worktrees",
-        autoCreateBranches: true,
-        autoDeleteBranches: false,
-        enableSparseCheckout: false,
-        branchPrefix: "sudocode",
-        branchTemplate: "{prefix}/{executionId}/{title}",
-        cleanupOrphanedWorktreesOnStartup: false,
-      },
       editor: {
         editorType: "vs-code",
       },

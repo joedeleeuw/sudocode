@@ -258,7 +258,7 @@ export type WorktreeProvider = "git" | "worktrunk";
  * (the `worktree` section of `.sudocode/config.local.json`)
  */
 export interface WorktreeConfig {
-  /** Who creates and removes worktrees (default: "git") */
+  /** Who creates and removes worktrees (default: "worktrunk") */
   provider: WorktreeProvider;
   /** Where to store worktrees with the "git" provider (default: ".sudocode/worktrees") */
   worktreeStoragePath: string;

@@ -121,23 +121,22 @@ export async function handleSync(
 }
 
 export interface ExportOptions {
-  output: string;
+  output?: string;
 }
 
 export async function handleExport(
   ctx: CommandContext,
   options: ExportOptions
 ): Promise<void> {
+  const outputDir = options.output ?? ctx.outputDir;
   try {
-    await exportToJSONL(ctx.db, { outputDir: options.output });
+    await exportToJSONL(ctx.db, { outputDir });
 
     if (ctx.jsonOutput) {
-      console.log(
-        JSON.stringify({ success: true, outputDir: options.output }, null, 2)
-      );
+      console.log(JSON.stringify({ success: true, outputDir }, null, 2));
     } else {
       console.log(chalk.green("✓ Exported to JSONL"));
-      console.log(chalk.gray(`  Output: ${options.output}`));
+      console.log(chalk.gray(`  Output: ${outputDir}`));
     }
   } catch (error) {
     console.error(chalk.red("✗ Failed to export"));
@@ -147,23 +146,22 @@ export async function handleExport(
 }
 
 export interface ImportOptions {
-  input: string;
+  input?: string;
 }
 
 export async function handleImport(
   ctx: CommandContext,
   options: ImportOptions
 ): Promise<void> {
+  const inputDir = options.input ?? ctx.outputDir;
   try {
-    await importFromJSONL(ctx.db, { inputDir: options.input });
+    await importFromJSONL(ctx.db, { inputDir });
 
     if (ctx.jsonOutput) {
-      console.log(
-        JSON.stringify({ success: true, inputDir: options.input }, null, 2)
-      );
+      console.log(JSON.stringify({ success: true, inputDir }, null, 2));
     } else {
       console.log(chalk.green("✓ Imported from JSONL"));
-      console.log(chalk.gray(`  Input: ${options.input}`));
+      console.log(chalk.gray(`  Input: ${inputDir}`));
     }
   } catch (error) {
     console.error(chalk.red("✗ Failed to import"));

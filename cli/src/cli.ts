@@ -10,6 +10,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { initDatabase } from "./db.js";
 import { importJSONLIfStale } from "./import.js";
+import { projectDirectory, ProjectNotFoundError } from "./project.js";
 import type Database from "better-sqlite3";
 
 // Import command handlers
@@ -82,52 +83,26 @@ let outputDir: string = ".sudocode";
 let jsonOutput: boolean = false;
 
 /**
- * Find database path
- * Searches the current directory and its parents for a .sudocode directory
- * holding a tracker (cache.db, or the git-tracked config/JSONL files a fresh
- * clone or worktree has before its first cache.db exists)
+ * Open the project's database: the explicit --db path, or cache.db in the
+ * .sudocode project at the root of the current git repository.
  */
-function findDatabasePath(): string | null {
-  let currentDir = process.cwd();
-  const root = path.parse(currentDir).root;
-
-  while (currentDir !== root) {
-    const sudocodeDir = path.join(currentDir, ".sudocode");
-    const isTracker = [
-      "cache.db",
-      "config.json",
-      "issues.jsonl",
-      "specs.jsonl",
-    ].some((file) => fs.existsSync(path.join(sudocodeDir, file)));
-    if (isTracker) {
-      return path.join(sudocodeDir, "cache.db");
-    }
-    currentDir = path.dirname(currentDir);
-  }
-
-  return null;
-}
-
-/**
- * Initialize database connection
- */
-function initDB() {
+function initDB(): Database.Database {
   if (!dbPath) {
-    const found = findDatabasePath();
-    if (found) {
-      dbPath = found;
-      outputDir = path.dirname(found);
-    } else {
-      // Default location
-      outputDir = path.join(process.cwd(), ".sudocode");
-      dbPath = path.join(outputDir, "cache.db");
+    try {
+      outputDir = projectDirectory(process.cwd());
+    } catch (error) {
+      if (error instanceof ProjectNotFoundError) {
+        console.error(chalk.red(`Error: ${error.message}`));
+        process.exit(1);
+      }
+      throw error;
     }
+    dbPath = path.join(outputDir, "cache.db");
   }
 
   try {
-    // Ensure the database directory exists before opening/creating the database
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    db = initDatabase({ path: dbPath });
+    return initDatabase({ path: dbPath });
   } catch (error) {
     console.error(chalk.red("Error: Failed to open database"));
     console.error(error instanceof Error ? error.message : String(error));
@@ -142,8 +117,7 @@ function initDB() {
  */
 async function getContext() {
   if (!db) {
-    console.error(chalk.red("Error: Database not initialized"));
-    process.exit(1);
+    db = initDB();
   }
   const imported = await importJSONLIfStale(db, outputDir);
   if (imported) {
@@ -172,11 +146,6 @@ program
     const opts = thisCommand.optsWithGlobals();
     if (opts.db) dbPath = opts.db;
     if (opts.json) jsonOutput = true;
-
-    // Skip DB init for init command
-    if (thisCommand.name() !== "init") {
-      initDB();
-    }
   })
   .hook("postAction", () => {
     // Close database after command completes
@@ -519,7 +488,7 @@ program
 program
   .command("export")
   .description("Export database to JSONL")
-  .option("-o, --output <dir>", "Output directory", ".sudocode")
+  .option("-o, --output <dir>", "Output directory (default: the project's .sudocode)")
   .action(async (options) => {
     await handleExport(await getContext(), options);
   });
@@ -527,7 +496,7 @@ program
 program
   .command("import")
   .description("Import from JSONL to database")
-  .option("-i, --input <dir>", "Input directory", ".sudocode")
+  .option("-i, --input <dir>", "Input directory (default: the project's .sudocode)")
   .action(async (options) => {
     await handleImport(await getContext(), options);
   });

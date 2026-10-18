@@ -39,7 +39,7 @@ export type ToolHandlerType = "cli" | "api";
 // Default Scope Tools (CLI-based)
 // =============================================================================
 
-const DEFAULT_TOOLS: ToolDefinition[] = [
+const CLI_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "ready",
     scope: "default",
@@ -346,6 +346,20 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
     },
   },
 ];
+
+const PROJECT_PROPERTY = {
+  type: "string",
+  description:
+    "Absolute path inside the git repository whose sudocode project to use. Defaults to the directory the MCP server started in.",
+};
+
+const DEFAULT_TOOLS: ToolDefinition[] = CLI_TOOL_DEFINITIONS.map((tool) => ({
+  ...tool,
+  inputSchema: {
+    ...tool.inputSchema,
+    properties: { ...tool.inputSchema.properties, project: PROJECT_PROPERTY },
+  },
+}));
 
 // =============================================================================
 // Overview Tools

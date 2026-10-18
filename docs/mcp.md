@@ -24,7 +24,7 @@ Sudocode MCP provides tools for:
 2. **JSON Output**: Always use `--json` flag for structured, parseable responses
 3. **Error Handling**: Parse and return meaningful error messages from CLI
 4. **Context Preservation**: Maintain working directory across tool calls
-5. **Database Auto-Discovery**: Leverage CLI's built-in `.sudocode` discovery
+5. **One Owner for Project Discovery**: The CLI resolves the project as the `.sudocode` at the root of the git repository that contains the working directory, and fails with an error naming the directory when there is none
 
 ## Resources
 
@@ -78,6 +78,8 @@ Sudocode is a git-native spec and issue management system designed for AI-assist
 **Description**: Step-by-step workflow patterns for AI agents
 
 ## Tools
+
+Every CLI-backed tool accepts an optional `project`: an absolute path inside the git repository whose sudocode project to use. Without it, a tool uses the directory the server started in. A session started in a workspace that holds many repositories, such as `~/code`, names the repository on each call; the error for a call without one lists the projects under the workspace.
 
 ### Issue Management
 
@@ -425,17 +427,6 @@ Sudocode is a git-native spec and issue management system designed for AI-assist
 **Returns**: Simplified version of stats
 
 **CLI Command**: `sudocode status --json [--verbose]`
-
----
-
-### Initialization
-
-#### 22. `init`
-**Description**: Initialize sudocode in current directory
-
-**Returns**: `{ success: boolean, path: string }`
-
-**CLI Command**: `sudocode init`
 
 ---
 

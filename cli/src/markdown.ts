@@ -3,6 +3,9 @@
  */
 
 import matter from "gray-matter";
+// gray-matter serves a parse from a module-level cache when called without
+// options; that cache treats inherited object keys ("constructor") as hits and
+// keeps a parse that threw. Every parse here passes options so none is cached.
 import * as fs from "fs";
 import type Database from "better-sqlite3";
 import { getSpec } from "./operations/specs.js";
@@ -72,7 +75,7 @@ export function parseMarkdown<T extends object = Record<string, any>>(
   db?: Database.Database,
   outputDir?: string
 ): ParsedMarkdown<T> {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
 
   // Extract cross-references from content
   const references = extractCrossReferences(parsed.content, db);
@@ -253,7 +256,7 @@ export function replaceFrontmatter<T extends object = Record<string, any>>(
   raw: string,
   data: T
 ): string {
-  return frontmatterBlock(data) + matter(raw).content;
+  return frontmatterBlock(data) + matter(raw, {}).content;
 }
 
 /**
@@ -264,7 +267,7 @@ export function updateFrontmatter<T extends object = Record<string, any>>(
   originalContent: string,
   updates: Partial<T>
 ): string {
-  const parsed = matter(originalContent);
+  const parsed = matter(originalContent, {});
 
   // Merge updates into existing frontmatter
   const merged = {
@@ -325,7 +328,7 @@ export function writeMarkdownFile<T extends object = Record<string, any>>(
  * Remove frontmatter from markdown content
  */
 export function removeFrontmatter(content: string): string {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
   return parsed.content;
 }
 
@@ -335,7 +338,7 @@ export function removeFrontmatter(content: string): string {
 export function getFrontmatter<T extends object = Record<string, any>>(
   content: string
 ): T {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
   return parsed.data as T;
 }
 

@@ -12,6 +12,7 @@
 import type Database from "better-sqlite3";
 import { exportToJSONL } from "@sudocode-ai/cli/dist/export.js";
 import {
+  assertSynced,
   syncJSONLToMarkdown,
   syncEntityMetadataToMarkdown as syncEntityMetadataToMarkdown_,
 } from "@sudocode-ai/cli/dist/sync.js";
@@ -114,7 +115,7 @@ export async function syncEntityToMarkdown(
     return;
   }
   const mdPath = resolveEntityMarkdownPath(entity, entityType, dir);
-  await syncJSONLToMarkdown(db, entity.id, entityType, mdPath);
+  assertSynced(await syncJSONLToMarkdown(db, entity.id, entityType, mdPath));
 }
 
 /**
@@ -134,7 +135,7 @@ export async function syncEntityMetadataToMarkdown(
     return;
   }
   const mdPath = resolveEntityMarkdownPath(entity, entityType, dir);
-  await syncEntityMetadataToMarkdown_(db, entity.id, entityType, mdPath);
+  assertSynced(await syncEntityMetadataToMarkdown_(db, entity.id, entityType, mdPath));
 }
 
 /**

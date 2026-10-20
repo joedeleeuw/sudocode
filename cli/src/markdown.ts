@@ -235,7 +235,37 @@ export function stringifyMarkdown<T extends object = Record<string, any>>(
   data: T,
   content: string
 ): string {
-  return matter.stringify(content, data);
+  return matter.stringify({ content }, data);
+}
+
+function frontmatterBlock<T extends object>(data: T): string {
+  const serialized = matter.stringify({ content: "" }, data);
+  return serialized.slice(0, serialized.lastIndexOf("---") + 3) + "\n";
+}
+
+function bodyAfterFrontmatter(raw: string): string {
+  const lines = raw.split("\n");
+  if (lines[0]?.replace(/^\uFEFF/, "").trim() !== "---") {
+    return raw;
+  }
+  const closing = lines.findIndex(
+    (line, index) => index > 0 && line.trim() === "---"
+  );
+  if (closing === -1) {
+    return raw;
+  }
+  return lines.slice(closing + 1).join("\n");
+}
+
+/**
+ * Replace the frontmatter of a markdown document and keep every byte of the
+ * body that follows it, so a metadata write never re-serializes the body.
+ */
+export function replaceFrontmatter<T extends object = Record<string, any>>(
+  raw: string,
+  data: T
+): string {
+  return frontmatterBlock(data) + bodyAfterFrontmatter(raw);
 }
 
 /**

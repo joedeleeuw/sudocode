@@ -7,6 +7,7 @@ import * as path from "path";
 import type Database from "better-sqlite3";
 import {
   parseMarkdownFile,
+  replaceFrontmatter,
   updateFrontmatterFile,
   writeMarkdownFile,
 } from "./markdown.js";
@@ -380,6 +381,18 @@ export async function syncJSONLToMarkdown(
 }
 
 /**
+ * A markdown write that did not happen is an error for the command that asked
+ * for it, never a silent success.
+ */
+export function assertSynced(result: MarkdownSyncResult): void {
+  if (!result.success) {
+    throw new Error(
+      `markdown not updated for ${result.entityType} ${result.entityId}: ${result.error}`
+    );
+  }
+}
+
+/**
  * Rewrite only the frontmatter of an entity's markdown file from the database,
  * keeping the body the file already holds. A metadata change in the database
  * (a relationship, status, priority, parent, tags) never discards an edit to
@@ -398,10 +411,15 @@ export async function syncEntityMetadataToMarkdown(
       return entityNotFound(entityId, entityType);
     }
     const fileExists = fs.existsSync(mdPath);
-    const body = fileExists
-      ? parseMarkdownFile(mdPath).content
-      : loaded.entity.content || "";
-    writeMarkdownFile(mdPath, loaded.frontmatter, body);
+    if (fileExists) {
+      fs.writeFileSync(
+        mdPath,
+        replaceFrontmatter(fs.readFileSync(mdPath, "utf8"), loaded.frontmatter),
+        "utf8"
+      );
+    } else {
+      writeMarkdownFile(mdPath, loaded.frontmatter, loaded.entity.content || "");
+    }
     return {
       success: true,
       action: fileExists ? "updated" : "created",

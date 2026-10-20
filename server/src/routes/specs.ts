@@ -20,6 +20,7 @@ import {
   triggerExport,
   executeExportNow,
   syncEntityToMarkdown,
+  syncEntityMetadataToMarkdown,
 } from "../services/export.js";
 import { refreshSpec } from "../services/external-refresh-service.js";
 import * as path from "path";
@@ -248,7 +249,7 @@ export function createSpecsRouter(): Router {
       }
 
       // Sync this specific spec to its markdown file (don't wait for it)
-      syncEntityToMarkdown(
+      (content === undefined ? syncEntityMetadataToMarkdown : syncEntityToMarkdown)(
         req.project!.db,
         spec.id,
         "spec",

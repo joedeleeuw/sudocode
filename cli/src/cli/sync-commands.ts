@@ -88,35 +88,26 @@ export async function handleSync(
   } else if (options.toMarkdown) {
     // Manual sync from database to markdown
     await handleSyncToMarkdown(ctx);
+  } else if (isMarkdownFirst(getConfig(ctx.outputDir))) {
+    await handleSyncFromMarkdown(ctx);
   } else {
-    // Auto-detect sync direction based on file modification times
-    // TODO: Independently handle sync direction from specs and issues.
-    const { direction, reason } = determineSyncDirection(ctx);
-
-    console.log(chalk.blue("Detecting sync direction..."));
-    console.log(chalk.gray(`  ${reason}`));
-    console.log();
-
-    if (direction === "no-sync") {
-      console.log(chalk.green("✓ Everything is in sync"));
-      console.log(
-        chalk.gray(
-          "  Use --from-markdown or --to-markdown to force a specific direction"
-        )
-      );
-    } else if (direction === "from-markdown") {
-      console.log(
-        chalk.blue("→ Syncing FROM markdown TO database (markdown is newer)")
-      );
-      console.log();
-      await handleSyncFromMarkdown(ctx);
-    } else if (direction === "to-markdown") {
-      console.log(
-        chalk.blue("→ Syncing FROM database TO markdown (database is newer)")
-      );
-      console.log();
-      await handleSyncToMarkdown(ctx);
-    }
+    console.error(chalk.red("✗ sudocode sync needs a direction"));
+    console.error(
+      chalk.gray(
+        "  --from-markdown  the markdown files are the source (after editing bodies by hand)"
+      )
+    );
+    console.error(
+      chalk.gray(
+        "  --to-markdown    the database and JSONL are the source (after a pull or an import)"
+      )
+    );
+    console.error(
+      chalk.gray(
+        "  Set sourceOfTruth = \"markdown\" in .sudocode/config.json to make the bare command sync from markdown."
+      )
+    );
+    process.exit(1);
   }
 }
 
@@ -357,209 +348,4 @@ function findMarkdownFiles(dir: string): string[] {
 
   scan(dir);
   return results;
-}
-
-/**
- * Get the most recent modification time from a list of files
- * Returns null if no files exist
- */
-function getMostRecentModTime(files: string[]): Date | null {
-  if (files.length === 0) return null;
-
-  let mostRecent: Date | null = null;
-
-  for (const file of files) {
-    try {
-      const stats = fs.statSync(file);
-      const mtime = stats.mtime;
-
-      if (!mostRecent || mtime > mostRecent) {
-        mostRecent = mtime;
-      }
-    } catch (error) {
-      // Ignore files that don't exist or can't be accessed
-      continue;
-    }
-  }
-
-  return mostRecent;
-}
-
-/**
- * Get modification time of a file
- * Returns null if file doesn't exist
- */
-function getFileModTime(filePath: string): Date | null {
-  try {
-    const stats = fs.statSync(filePath);
-    return stats.mtime;
-  } catch (error) {
-    return null;
-  }
-}
-
-/**
- * Determine sync direction based on config and timestamps
- * Direction depends on sourceOfTruth setting:
- * - "jsonl" (default): Use timestamp comparison, prefer DB in conflicts
- * - "markdown": Always sync from markdown (markdown is authoritative)
- */
-function determineSyncDirection(ctx: CommandContext): {
-  direction: "to-markdown" | "from-markdown" | "no-sync";
-  reason: string;
-} {
-  // Check source of truth setting first
-  const config = getConfig(ctx.outputDir);
-  if (isMarkdownFirst(config)) {
-    // Markdown is source of truth - always sync from markdown
-    return {
-      direction: "from-markdown",
-      reason: "Markdown is source of truth (config.sourceOfTruth = 'markdown')",
-    };
-  }
-
-  // JSONL/DB is source of truth - use timestamp comparison
-  const specsDir = path.join(ctx.outputDir, "specs");
-  const issuesDir = path.join(ctx.outputDir, "issues");
-  const specsJsonl = path.join(ctx.outputDir, "specs.jsonl");
-  const issuesJsonl = path.join(ctx.outputDir, "issues.jsonl");
-
-  // Get JSONL modification times
-  const specsJsonlTime = getFileModTime(specsJsonl);
-  const issuesJsonlTime = getFileModTime(issuesJsonl);
-
-  // Get markdown file times
-  let specMarkdownFiles: string[] = [];
-  let issueMarkdownFiles: string[] = [];
-
-  if (fs.existsSync(specsDir)) {
-    specMarkdownFiles = findMarkdownFiles(specsDir);
-  }
-  if (fs.existsSync(issuesDir)) {
-    issueMarkdownFiles = findMarkdownFiles(issuesDir);
-  }
-
-  const specsMarkdownTime = getMostRecentModTime(specMarkdownFiles);
-  const issuesMarkdownTime = getMostRecentModTime(issueMarkdownFiles);
-
-  // Get the most recent updated_at timestamp from database
-  const specs = listSpecs(ctx.db, {});
-  const issues = listIssues(ctx.db, {});
-
-  const dbSpecsTime =
-    specs.length > 0
-      ? new Date(
-          Math.max(...specs.map((s: any) => new Date(s.updated_at).getTime()))
-        )
-      : null;
-  const dbIssuesTime =
-    issues.length > 0
-      ? new Date(
-          Math.max(...issues.map((i: any) => new Date(i.updated_at).getTime()))
-        )
-      : null;
-
-  // Determine sync direction
-  let syncToMarkdown = false;
-  let syncFromMarkdown = false;
-  const reasons: string[] = [];
-
-  // Check specs
-  if (!dbSpecsTime && !specsMarkdownTime) {
-    // Neither exists - no sync needed
-    reasons.push("No spec files or database entries found");
-  } else if (!dbSpecsTime && specsMarkdownTime) {
-    // Only markdown exists - sync from markdown
-    syncFromMarkdown = true;
-    reasons.push("Specs database empty, markdown exists");
-  } else if (dbSpecsTime && !specsMarkdownTime) {
-    // Only database exists - sync to markdown
-    syncToMarkdown = true;
-    reasons.push("Spec markdown files missing, database has entries");
-  } else if (dbSpecsTime && specsMarkdownTime) {
-    // Both exist - compare markdown file time against database time
-    if (specsMarkdownTime > dbSpecsTime) {
-      syncFromMarkdown = true;
-      reasons.push(
-        `Spec markdown files are newer than database (${formatTime(
-          specsMarkdownTime
-        )} > ${formatTime(dbSpecsTime)})`
-      );
-    } else if (dbSpecsTime > specsMarkdownTime) {
-      syncToMarkdown = true;
-      reasons.push(
-        `Spec database is newer than markdown files (${formatTime(dbSpecsTime)} > ${formatTime(
-          specsMarkdownTime
-        )})`
-      );
-    } else {
-      reasons.push("Specs are in sync");
-    }
-  }
-
-  // Check issues
-  if (!dbIssuesTime && !issuesMarkdownTime) {
-    // Neither exists - no sync needed
-    reasons.push("No issue files or database entries found");
-  } else if (!dbIssuesTime && issuesMarkdownTime) {
-    // Only markdown exists - sync from markdown
-    syncFromMarkdown = true;
-    reasons.push("Issues database empty, markdown exists");
-  } else if (dbIssuesTime && !issuesMarkdownTime) {
-    // Only database exists - sync to markdown
-    syncToMarkdown = true;
-    reasons.push("Issue markdown files missing, database has entries");
-  } else if (dbIssuesTime && issuesMarkdownTime) {
-    // Both exist - compare markdown file time against database time
-    if (issuesMarkdownTime > dbIssuesTime) {
-      syncFromMarkdown = true;
-      reasons.push(
-        `Issue markdown files are newer than database (${formatTime(
-          issuesMarkdownTime
-        )} > ${formatTime(dbIssuesTime)})`
-      );
-    } else if (dbIssuesTime > issuesMarkdownTime) {
-      syncToMarkdown = true;
-      reasons.push(
-        `Issue database is newer than markdown files (${formatTime(dbIssuesTime)} > ${formatTime(
-          issuesMarkdownTime
-        )})`
-      );
-    } else {
-      reasons.push("Issues are in sync");
-    }
-  }
-
-  // Decide direction - prefer database (to-markdown) in conflicts since database is source of truth
-  // Only sync from-markdown if markdown is clearly newer (user edited files)
-  if (syncFromMarkdown && syncToMarkdown) {
-    // Mixed state - prefer database as source of truth
-    // This prevents stale markdown files from overwriting fresh database/JSONL data
-    return {
-      direction: "to-markdown",
-      reason: reasons.join("; ") + " (using database as source of truth)",
-    };
-  } else if (syncFromMarkdown) {
-    return {
-      direction: "from-markdown",
-      reason: reasons.join("; "),
-    };
-  } else if (syncToMarkdown) {
-    return {
-      direction: "to-markdown",
-      reason: reasons.join("; "),
-    };
-  } else {
-    return {
-      direction: "no-sync",
-      reason: reasons.join("; "),
-    };
-  }
-}
-
-/**
- * Format timestamp for display
- */
-function formatTime(date: Date): string {
-  return date.toISOString().replace("T", " ").substring(0, 19);
 }

@@ -15,7 +15,7 @@ import {
 import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { getIssueFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastIssueUpdate } from "../services/websocket.js";
-import { triggerExport, executeExportNow, syncEntityToMarkdown } from "../services/export.js";
+import { triggerExport, executeExportNow, syncEntityToMarkdown, syncEntityMetadataToMarkdown } from "../services/export.js";
 import { refreshIssue } from "../services/external-refresh-service.js";
 import * as path from "path";
 import { findExistingEntityFile } from "@sudocode-ai/cli/dist/filename-generator.js";
@@ -251,7 +251,7 @@ export function createIssuesRouter(): Router {
       }
 
       // Sync this specific issue to its markdown file (don't wait for it)
-      syncEntityToMarkdown(req.project!.db, issue.id, "issue", req.project!.sudocodeDir).catch((error) => {
+      (content === undefined ? syncEntityMetadataToMarkdown : syncEntityToMarkdown)(req.project!.db, issue.id, "issue", req.project!.sudocodeDir).catch((error) => {
         console.error(`Failed to sync issue ${issue.id} to markdown:`, error);
       });
 

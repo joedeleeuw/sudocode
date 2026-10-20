@@ -79,7 +79,7 @@ export async function handleIssueCreate(
     // Generate filename using unified scheme: {id}_{title_slug}.md
     const fileName = generateUniqueFilename(title, issueId);
     const mdPath = path.join(issuesDir, fileName);
-    await syncJSONLToMarkdown(ctx.db, issueId, 'issue', mdPath);
+    assertSynced(await syncJSONLToMarkdown(ctx.db, issueId, 'issue', mdPath));
 
     if (ctx.jsonOutput) {
       console.log(

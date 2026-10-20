@@ -243,29 +243,17 @@ function frontmatterBlock<T extends object>(data: T): string {
   return serialized.slice(0, serialized.lastIndexOf("---") + 3) + "\n";
 }
 
-function bodyAfterFrontmatter(raw: string): string {
-  const lines = raw.split("\n");
-  if (lines[0]?.replace(/^\uFEFF/, "").trim() !== "---") {
-    return raw;
-  }
-  const closing = lines.findIndex(
-    (line, index) => index > 0 && line.trim() === "---"
-  );
-  if (closing === -1) {
-    return raw;
-  }
-  return lines.slice(closing + 1).join("\n");
-}
-
 /**
- * Replace the frontmatter of a markdown document and keep every byte of the
- * body that follows it, so a metadata write never re-serializes the body.
+ * Replace the frontmatter of a markdown document and keep the body exactly as
+ * gray-matter reads it, so a metadata write never changes what a later parse
+ * returns as content. The body boundary comes from the same parser that reads
+ * the file; this module owns no second frontmatter grammar.
  */
 export function replaceFrontmatter<T extends object = Record<string, any>>(
   raw: string,
   data: T
 ): string {
-  return frontmatterBlock(data) + bodyAfterFrontmatter(raw);
+  return frontmatterBlock(data) + matter(raw).content;
 }
 
 /**

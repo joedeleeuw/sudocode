@@ -508,7 +508,7 @@ feedback
 
 program
   .command("sync")
-  .description("Sync between markdown, JSONL, and database")
+  .description("Sync between markdown, JSONL, and database (pass --from-markdown or --to-markdown)")
   .option("--watch", "Watch for changes and auto-sync")
   .option("--from-markdown", "Sync from markdown to database")
   .option("--to-markdown", "Sync from database to markdown")

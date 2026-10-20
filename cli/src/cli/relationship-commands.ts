@@ -7,7 +7,7 @@ import * as path from "path";
 import type Database from "better-sqlite3";
 import { addRelationship } from "../operations/relationships.js";
 import { exportToJSONL } from "../export.js";
-import { syncJSONLToMarkdown } from "../sync.js";
+import { syncEntityMetadataToMarkdown } from "../sync.js";
 import { getSpec } from "../operations/specs.js";
 import { getIssue } from "../operations/issues.js";
 import { syncFileWithRename } from "../filename-generator.js";
@@ -84,14 +84,14 @@ export async function handleLink(
       const spec = getSpec(ctx.db, from);
       if (spec) {
         const specPath = path.join(ctx.outputDir, spec.file_path);
-        await syncJSONLToMarkdown(ctx.db, from, "spec", specPath);
+        await syncEntityMetadataToMarkdown(ctx.db, from, "spec", specPath);
       }
     } else {
       const issue = getIssue(ctx.db, from);
       if (issue) {
         const issuesDir = path.join(ctx.outputDir, "issues");
         const issuePath = syncFileWithRename(from, issuesDir, issue.title);
-        await syncJSONLToMarkdown(ctx.db, from, "issue", issuePath);
+        await syncEntityMetadataToMarkdown(ctx.db, from, "issue", issuePath);
       }
     }
 

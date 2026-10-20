@@ -301,9 +301,53 @@ export async function syncMarkdownToJSONL(
   }
 }
 
+type EntityFrontmatter = {
+  entity: Spec | Issue;
+  frontmatter: ReturnType<typeof entityToFrontmatter>;
+};
+
+async function loadEntityFrontmatter(
+  db: Database.Database,
+  entityId: string,
+  entityType: "spec" | "issue"
+): Promise<EntityFrontmatter | null> {
+  const entity =
+    entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
+  if (!entity) {
+    return null;
+  }
+  const { getOutgoingRelationships } = await import(
+    "./operations/relationships.js"
+  );
+  const relationships = getOutgoingRelationships(db, entityId, entityType);
+  const tags = getTags(db, entityId, entityType);
+  return {
+    entity,
+    frontmatter: entityToFrontmatter(entity, entityType, relationships, tags),
+  };
+}
+
+function entityNotFound(
+  entityId: string,
+  entityType: "spec" | "issue"
+): MarkdownSyncResult {
+  return {
+    success: false,
+    action: "no-change",
+    entityId,
+    entityType,
+    error: `${entityType} not found: ${entityId}`,
+  };
+}
+
 /**
  * Sync from JSONL/SQLite to markdown file
- * Writes full content (frontmatter + body) from database to markdown
+ * Writes full content (frontmatter + body) from database to markdown.
+ * Only for callers that changed the body in the database, or whose sync
+ * direction established the database as the owner of the body (bulk sync,
+ * watcher). A command that changed only metadata (a relationship, status,
+ * priority, parent, tags) uses syncEntityMetadataToMarkdown, which keeps the
+ * body the file already holds.
  */
 export async function syncJSONLToMarkdown(
   db: Database.Database,
@@ -312,44 +356,52 @@ export async function syncJSONLToMarkdown(
   mdPath: string
 ): Promise<MarkdownSyncResult> {
   try {
-    // Get entity from database
-    const entity =
-      entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
-
-    if (!entity) {
-      return {
-        success: false,
-        action: "no-change",
-        entityId,
-        entityType,
-        error: `${entityType} not found: ${entityId}`,
-      };
+    const loaded = await loadEntityFrontmatter(db, entityId, entityType);
+    if (!loaded) {
+      return entityNotFound(entityId, entityType);
     }
-
-    // Get relationships and tags
-    const { getOutgoingRelationships } = await import(
-      "./operations/relationships.js"
-    );
-    const relationships = getOutgoingRelationships(db, entityId, entityType);
-    const tags = getTags(db, entityId, entityType);
-
-    // Build frontmatter
-    const frontmatter = entityToFrontmatter(
-      entity,
-      entityType,
-      relationships,
-      tags
-    );
-
-    // Check if file exists (for action reporting)
     const fileExists = fs.existsSync(mdPath);
+    writeMarkdownFile(mdPath, loaded.frontmatter, loaded.entity.content || "");
+    return {
+      success: true,
+      action: fileExists ? "updated" : "created",
+      entityId,
+      entityType,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      action: "no-change",
+      entityId,
+      entityType,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
-    // Write full content (frontmatter + body) from database
-    // When this function is called, sync direction has already determined
-    // that database is the source of truth, so we write everything
-    const content = entity.content || "";
-    writeMarkdownFile(mdPath, frontmatter, content);
-
+/**
+ * Rewrite only the frontmatter of an entity's markdown file from the database,
+ * keeping the body the file already holds. A metadata change in the database
+ * (a relationship, status, priority, parent, tags) never discards an edit to
+ * the body that the database has not imported yet. When the file does not
+ * exist, the body is the database content.
+ */
+export async function syncEntityMetadataToMarkdown(
+  db: Database.Database,
+  entityId: string,
+  entityType: "spec" | "issue",
+  mdPath: string
+): Promise<MarkdownSyncResult> {
+  try {
+    const loaded = await loadEntityFrontmatter(db, entityId, entityType);
+    if (!loaded) {
+      return entityNotFound(entityId, entityType);
+    }
+    const fileExists = fs.existsSync(mdPath);
+    const body = fileExists
+      ? parseMarkdownFile(mdPath).content
+      : loaded.entity.content || "";
+    writeMarkdownFile(mdPath, loaded.frontmatter, body);
     return {
       success: true,
       action: fileExists ? "updated" : "created",

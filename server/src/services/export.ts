@@ -11,7 +11,10 @@
 
 import type Database from "better-sqlite3";
 import { exportToJSONL } from "@sudocode-ai/cli/dist/export.js";
-import { syncJSONLToMarkdown } from "@sudocode-ai/cli/dist/sync.js";
+import {
+  syncJSONLToMarkdown,
+  syncEntityMetadataToMarkdown as syncEntityMetadataToMarkdown_,
+} from "@sudocode-ai/cli/dist/sync.js";
 import { getConfig, isMarkdownFirst } from "@sudocode-ai/cli/dist/config.js";
 import { syncFileWithRename } from "@sudocode-ai/cli/dist/filename-generator.js";
 import { getSudocodeDir } from "../utils/sudocode-dir.js";
@@ -69,8 +72,35 @@ async function executeFullExport(db: Database.Database, outputDir?: string): Pro
   }
 }
 
+function resolveEntityMarkdownPath(
+  entity: { id: string; title: string; file_path?: string | null },
+  entityType: "spec" | "issue",
+  dir: string
+): string {
+  if (entityType === "issue") {
+    return syncFileWithRename(entity.id, path.join(dir, "issues"), entity.title);
+  }
+  return entity.file_path && fs.existsSync(path.join(dir, entity.file_path))
+    ? path.join(dir, entity.file_path)
+    : syncFileWithRename(entity.id, path.join(dir, "specs"), entity.title);
+}
+
+async function loadEntity(
+  db: Database.Database,
+  entityId: string,
+  entityType: "spec" | "issue"
+) {
+  if (entityType === "issue") {
+    const { getIssueById } = await import("./issues.js");
+    return getIssueById(db, entityId);
+  }
+  const { getSpecById } = await import("./specs.js");
+  return getSpecById(db, entityId);
+}
+
 /**
- * Sync a single entity to its markdown file
+ * Sync a single entity to its markdown file, body included.
+ * For a route that changed the body in the database.
  */
 export async function syncEntityToMarkdown(
   db: Database.Database,
@@ -79,26 +109,32 @@ export async function syncEntityToMarkdown(
   outputDir?: string
 ): Promise<void> {
   const dir = outputDir || getSudocodeDir();
-
-  if (entityType === "issue") {
-    const { getIssueById } = await import("./issues.js");
-    const issue = getIssueById(db, entityId);
-    if (issue) {
-      const issuesDir = path.join(dir, "issues");
-      const mdPath = syncFileWithRename(issue.id, issuesDir, issue.title);
-      await syncJSONLToMarkdown(db, issue.id, "issue", mdPath);
-    }
-  } else {
-    const { getSpecById } = await import("./specs.js");
-    const spec = getSpecById(db, entityId);
-    if (spec) {
-      const specsDir = path.join(dir, "specs");
-      const mdPath = spec.file_path && fs.existsSync(path.join(dir, spec.file_path))
-        ? path.join(dir, spec.file_path)
-        : syncFileWithRename(spec.id, specsDir, spec.title);
-      await syncJSONLToMarkdown(db, spec.id, "spec", mdPath);
-    }
+  const entity = await loadEntity(db, entityId, entityType);
+  if (!entity) {
+    return;
   }
+  const mdPath = resolveEntityMarkdownPath(entity, entityType, dir);
+  await syncJSONLToMarkdown(db, entity.id, entityType, mdPath);
+}
+
+/**
+ * Rewrite an entity's frontmatter from the database and keep the file's body.
+ * For a route that changed only metadata (relationships, status, priority,
+ * parent, tags), so a body edit the database has not imported survives.
+ */
+export async function syncEntityMetadataToMarkdown(
+  db: Database.Database,
+  entityId: string,
+  entityType: "spec" | "issue",
+  outputDir?: string
+): Promise<void> {
+  const dir = outputDir || getSudocodeDir();
+  const entity = await loadEntity(db, entityId, entityType);
+  if (!entity) {
+    return;
+  }
+  const mdPath = resolveEntityMarkdownPath(entity, entityType, dir);
+  await syncEntityMetadataToMarkdown_(db, entity.id, entityType, mdPath);
 }
 
 /**

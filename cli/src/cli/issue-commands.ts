@@ -22,7 +22,7 @@ import {
 import { getTags, setTags } from "../operations/tags.js";
 import { listFeedback } from "../operations/feedback.js";
 import { exportToJSONL } from "../export.js";
-import { syncJSONLToMarkdown } from "../sync.js";
+import { syncJSONLToMarkdown, syncEntityMetadataToMarkdown } from "../sync.js";
 import { generateUniqueFilename, findExistingEntityFile, syncFileWithRename } from "../filename-generator.js";
 import {
   isValidIssueStatus,
@@ -362,7 +362,11 @@ export async function handleIssueUpdate(
 
     // Find existing file, rename if title changed, or generate new filename
     const mdPath = syncFileWithRename(id, issuesDir, issue.title);
-    await syncJSONLToMarkdown(ctx.db, id, 'issue', mdPath);
+    const writeMarkdown =
+      options.description === undefined
+        ? syncEntityMetadataToMarkdown
+        : syncJSONLToMarkdown;
+    await writeMarkdown(ctx.db, id, 'issue', mdPath);
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(issue, null, 2));
@@ -427,7 +431,7 @@ export async function handleIssueClose(
         // Find existing file, rename if title changed, or generate new filename
         const issue = getIssue(ctx.db, result.id);
         const mdPath = syncFileWithRename(result.id, issuesDir, issue?.title || result.id);
-        await syncJSONLToMarkdown(ctx.db, result.id, 'issue', mdPath);
+        await syncEntityMetadataToMarkdown(ctx.db, result.id, 'issue', mdPath);
       }
     }
 

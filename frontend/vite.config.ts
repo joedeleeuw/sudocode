@@ -12,7 +12,13 @@ export default defineConfig(({ mode }) => {
   const FRONTEND_PORT = env.FRONTEND_PORT || '3001'
 
   return {
-    plugins: [react()],
+    plugins: [
+      react({
+        babel: {
+          plugins: [['babel-plugin-react-compiler', {}]],
+        },
+      }),
+    ],
 
     resolve: {
       alias: {

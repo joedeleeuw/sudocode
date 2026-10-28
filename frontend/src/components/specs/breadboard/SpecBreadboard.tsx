@@ -1,21 +1,36 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import type { Issue } from '@/types/api'
 import { FlowCanvas } from '@/components/flow/FlowCanvas'
-import type { SpecBreadboardProjection, SpecBreadboardSection } from '@/lib/spec-breadboard'
+import type {
+  SpecBreadboardOutcome,
+  SpecBreadboardProjection,
+  SpecBreadboardSection,
+} from '@/lib/spec-breadboard'
 import { BreadboardPlaceNode, type BreadboardPlaceData } from './BreadboardPlaceNode'
 import { breadboardDimensions } from './layout'
 
 const nodeTypes = { breadboardPlace: BreadboardPlaceNode }
 
-function flowElements(section: SpecBreadboardSection) {
+function flowElements(section: SpecBreadboardSection, outcome?: SpecBreadboardOutcome) {
+  let rows = section.affordances
+  if (outcome) {
+    const ids = new Set(outcome.affordanceIds)
+    rows = rows.filter((row) => ids.has(row.id))
+  }
   const ownerByTarget = new Map<string, string>()
   for (const place of section.places) ownerByTarget.set(place.id, place.id)
-  for (const row of section.affordances) ownerByTarget.set(row.id, row.placeIds[0])
+  for (const row of rows) ownerByTarget.set(row.id, row.placeIds[0])
 
-  const nodes: Node[] = section.places.map((place) => {
-    const affordances = section.affordances.filter((row) => row.placeIds[0] === place.id)
+  const visiblePlaces = section.places.filter((place) =>
+    rows.some((row) => row.placeIds.includes(place.id))
+  )
+  const nodes: Node[] = visiblePlaces.map((place) => {
+    const affordances = rows.filter((row) => row.placeIds[0] === place.id)
     const data: BreadboardPlaceData = {
       place,
       affordances,
@@ -25,17 +40,18 @@ function flowElements(section: SpecBreadboardSection) {
   })
 
   const edges: Edge[] = []
-  for (const row of section.affordances) {
+  for (const row of rows) {
     for (const [kind, targets] of [
       ['out', row.wiresOut],
       ['return', row.returnsTo],
     ] as const) {
       for (const target of targets) {
         const sourceNode = ownerByTarget.get(row.id)
-        const targetNode = ownerByTarget.get(target)
-        if (!sourceNode || !targetNode) {
-          throw new Error(`Breadboard wire ${row.id} → ${target} has no place owner.`)
+        if (!sourceNode) {
+          throw new Error(`Breadboard wire ${row.id} has no place owner.`)
         }
+        const targetNode = ownerByTarget.get(target)
+        if (!targetNode) continue
         const color =
           kind === 'out' ? 'hsl(var(--foreground) / 0.7)' : 'hsl(var(--muted-foreground) / 0.55)'
         edges.push({
@@ -79,8 +95,17 @@ function routeBreadboardEdges(edges: Edge[], nodes: Node[]) {
   })
 }
 
-export function SpecBreadboard({ projection }: { projection: SpecBreadboardProjection }) {
+export function SpecBreadboard({
+  projection,
+  issues,
+  issueHref,
+}: {
+  projection: SpecBreadboardProjection
+  issues: Issue[]
+  issueHref: (issueId: string) => string
+}) {
   const [selectedId, setSelectedId] = useState<SpecBreadboardSection['id'] | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
   if (projection.status === 'absent') return null
   if (projection.status === 'invalid') {
     return (
@@ -91,28 +116,72 @@ export function SpecBreadboard({ projection }: { projection: SpecBreadboardProje
     )
   }
 
+  const outcomeId = searchParams.get('outcome')
+  const outcome = projection.outcomes.find((candidate) => candidate.id === outcomeId)
+  if (outcomeId && !outcome) {
+    return (
+      <Card className="p-6">
+        <div className="font-medium text-destructive">Unknown outcome: {outcomeId}</div>
+      </Card>
+    )
+  }
+  const linkedIssue = outcome?.issueId
+    ? issues.find((issue) => issue.id === outcome.issueId)
+    : undefined
   const selected =
     projection.sections.find((section) => section.id === selectedId) ?? projection.sections[0]
+
   return (
-    <BreadboardSectionView
-      key={selected.id}
-      section={selected}
-      availableIds={projection.sections.map((candidate) => candidate.id)}
-      onSelect={setSelectedId}
-    />
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          aria-label="Outcome"
+          className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          value={outcomeId ?? ''}
+          onChange={(event) => {
+            const next = new URLSearchParams(searchParams)
+            if (event.target.value) next.set('outcome', event.target.value)
+            else next.delete('outcome')
+            setSearchParams(next, { replace: true })
+          }}
+        >
+          <option value="">All outcomes</option>
+          {projection.outcomes.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.id}: {candidate.title}
+            </option>
+          ))}
+        </select>
+        {linkedIssue && (
+          <a className="text-sm text-primary hover:underline" href={issueHref(linkedIssue.id)}>
+            <Badge variant="outline">{linkedIssue.status.replace(/_/g, ' ')}</Badge>
+            <span className="ml-1 font-mono text-xs">{linkedIssue.id}</span>
+          </a>
+        )}
+      </div>
+      <BreadboardSectionView
+        key={`${selected.id}:${outcomeId ?? 'all'}`}
+        section={selected}
+        outcome={outcome}
+        availableIds={projection.sections.map((candidate) => candidate.id)}
+        onSelect={setSelectedId}
+      />
+    </div>
   )
 }
 
 function BreadboardSectionView({
   section,
+  outcome,
   availableIds,
   onSelect,
 }: {
   section: SpecBreadboardSection
+  outcome?: SpecBreadboardOutcome
   availableIds: SpecBreadboardSection['id'][]
   onSelect: (id: SpecBreadboardSection['id']) => void
 }) {
-  const { nodes, edges } = useMemo(() => flowElements(section), [section])
+  const { nodes, edges } = useMemo(() => flowElements(section, outcome), [section, outcome])
   const layoutEdges = useMemo(() => edges.filter((edge) => edge.data?.kind === 'out'), [edges])
   return (
     <div className="space-y-3">

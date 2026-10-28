@@ -1151,7 +1151,11 @@ Create actionable issues that implement its requirements. Each issue should be s
                 {/* Content */}
                 {content !== undefined ? (
                   activeViewMode === 'breadboard' ? (
-                    <SpecBreadboard projection={breadboardProjection} />
+                    <SpecBreadboard
+                      projection={breadboardProjection}
+                      issues={issues}
+                      issueHref={paths.issue}
+                    />
                   ) : (
                     <SpecViewerTiptap
                       content={content}

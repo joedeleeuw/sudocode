@@ -28,6 +28,13 @@ export type SpecBreadboardSection = {
   affordances: BreadboardAffordance[]
 }
 
+export type SpecBreadboardOutcome = {
+  id: string
+  title: string
+  affordanceIds: string[]
+  issueId?: string
+}
+
 export type SpecBreadboardProjection = ReturnType<typeof readSpecBreadboard>
 
 const markdown = unified().use(remarkParse).use(remarkGfm)
@@ -210,6 +217,47 @@ function parseSections(root: Root): SpecBreadboardSection[] {
   return sections
 }
 
+function readOutcomes(root: Root, sections: SpecBreadboardSection[]): SpecBreadboardOutcome[] {
+  const outcomes: SpecBreadboardOutcome[] = []
+  const ids = new Set<string>()
+  const affordanceIds = new Set(
+    sections.flatMap((section) => section.affordances.map((row) => row.id))
+  )
+  let active = false
+
+  for (const node of root.children as RootContent[]) {
+    if (node.type === 'heading' && node.depth === 2) {
+      active = node.children.map(phrasingText).join('').trim().toLowerCase() === 'outcomes'
+      continue
+    }
+    if (node.type !== 'table' || !active) continue
+    for (const cells of tableRows(node)) {
+      const row = rowRecord(cells)
+      const id = requiredCell('target', row, 'id', 'outcome')
+      if (ids.has(id)) throw new Error(`Duplicate outcome ID ${id}.`)
+      ids.add(id)
+      const title = requiredCell('target', row, 'outcome', id)
+      const issueId = /\[\[(i-[a-z0-9]+)\]\]/u.exec(title)?.[1]
+      const referencedIds = requiredCell('target', row, 'affordances', id)
+        .split(/[\s,]+/u)
+        .map((part) => part.trim())
+        .filter(Boolean)
+      for (const referencedId of referencedIds) {
+        if (!affordanceIds.has(referencedId)) {
+          throw new Error(`Outcome ${id} references unknown affordance ${referencedId}.`)
+        }
+      }
+      outcomes.push({
+        id,
+        title: title.replace(/\s*\[\[i-[a-z0-9]+\]\]\s*/u, '').trim(),
+        affordanceIds: referencedIds,
+        ...(issueId ? { issueId } : {}),
+      })
+    }
+  }
+  return outcomes
+}
+
 export function readSpecBreadboard(content: string) {
   const root = markdown.parse(content)
   const declared = root.children.some(
@@ -220,7 +268,12 @@ export function readSpecBreadboard(content: string) {
   )
   if (!declared) return { status: 'absent' as const }
   try {
-    return { status: 'available' as const, sections: parseSections(root) }
+    const sections = parseSections(root)
+    return {
+      status: 'available' as const,
+      sections,
+      outcomes: readOutcomes(root, sections),
+    }
   } catch (cause) {
     return {
       status: 'invalid' as const,

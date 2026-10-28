@@ -25,6 +25,8 @@ export interface WorkflowDAGProps {
   onPaneClick?: () => void
   /** Callback for step actions (retry, skip, cancel) */
   onStepAction?: (stepId: string, action: 'retry' | 'skip' | 'cancel') => void
+  outcomeIdByIssueId?: Record<string, string>
+  onOpenOutcome?: (outcomeId: string) => void
   /** Whether the DAG is interactive (default: true) */
   interactive?: boolean
   /** Show minimap (default: true) */
@@ -42,7 +44,9 @@ function stepsToFlowElements(
   steps: WorkflowStep[],
   issues?: Record<string, Issue>,
   selectedStepId?: string,
-  onStepSelect?: (stepId: string) => void
+  onStepSelect?: (stepId: string) => void,
+  outcomeIdByIssueId?: Record<string, string>,
+  onOpenOutcome?: (outcomeId: string) => void
 ): { nodes: Node[]; edges: Edge[] } {
   // Create nodes from steps
   const nodes: Node[] = steps.map((step) => ({
@@ -53,7 +57,9 @@ function stepsToFlowElements(
       step,
       issue: issues?.[step.issueId],
       isSelected: step.id === selectedStepId,
+      outcomeId: outcomeIdByIssueId?.[step.issueId],
       onSelect: onStepSelect,
+      onOpenOutcome,
     },
   }))
 
@@ -108,6 +114,8 @@ export function WorkflowDAG({
   selectedStepId,
   onStepSelect,
   onPaneClick,
+  outcomeIdByIssueId,
+  onOpenOutcome,
   interactive = true,
   showMinimap = true,
   showControls = true,
@@ -118,8 +126,16 @@ export function WorkflowDAG({
   const isDark = actualTheme === 'dark'
 
   const { nodes, edges } = useMemo(
-    () => stepsToFlowElements(steps, issues, selectedStepId, onStepSelect),
-    [steps, issues, selectedStepId, onStepSelect]
+    () =>
+      stepsToFlowElements(
+        steps,
+        issues,
+        selectedStepId,
+        onStepSelect,
+        outcomeIdByIssueId,
+        onOpenOutcome
+      ),
+    [steps, issues, selectedStepId, onStepSelect, outcomeIdByIssueId, onOpenOutcome]
   )
 
   // Empty state

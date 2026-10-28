@@ -72,7 +72,7 @@ export type KanbanCardProps = {
   style?: React.CSSProperties
   onClick?: () => void
   tabIndex?: number
-  forwardedRef?: Ref<HTMLDivElement>
+  ref?: Ref<HTMLDivElement>
   onKeyDown?: (e: KeyboardEvent) => void
   isOpen?: boolean
 }
@@ -87,7 +87,7 @@ export const KanbanCard = ({
   style,
   onClick,
   tabIndex,
-  forwardedRef,
+  ref,
   onKeyDown,
   isOpen,
 }: KanbanCardProps) => {
@@ -115,10 +115,10 @@ export const KanbanCard = ({
   // Combine DnD ref and forwarded ref
   const combinedRef = (node: HTMLDivElement | null) => {
     setNodeRef(node)
-    if (typeof forwardedRef === 'function') {
-      forwardedRef(node)
-    } else if (forwardedRef && typeof forwardedRef === 'object') {
-      ;(forwardedRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+    if (typeof ref === 'function') {
+      ref(node)
+    } else if (ref) {
+      ref.current = node
     }
   }
 
@@ -192,7 +192,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
     return (
       <Card
         className={cn(
-          'sticky top-0 z-20 flex flex-col flex-1 shrink-0 items-center justify-center border-b border-dashed p-3',
+          'sticky top-0 z-20 flex flex-1 shrink-0 flex-col items-center justify-center border-b border-dashed p-3',
           'bg-background',
           props.className
         )}
@@ -201,7 +201,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
         }}
       >
         <div
-          className="flex items-center gap-2 whitespace-nowrap cursor-pointer hover:opacity-80 transition-opacity"
+          className="flex cursor-pointer items-center gap-2 whitespace-nowrap transition-opacity hover:opacity-80"
           style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
           onClick={props.onToggleCollapse}
         >
@@ -228,7 +228,7 @@ export const KanbanHeader = (props: KanbanHeaderProps) => {
       }}
     >
       <span
-        className="flex flex-1 items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+        className="flex flex-1 cursor-pointer items-center gap-2 transition-opacity hover:opacity-80"
         onClick={props.onToggleCollapse}
       >
         <div
@@ -400,7 +400,10 @@ export const KanbanProvider = ({
       modifiers={[restrictToFirstScrollableAncestorCustom]}
     >
       <div
-        className={cn('inline-grid h-full grid-flow-col divide-x border-x transition-all', className)}
+        className={cn(
+          'inline-grid h-full grid-flow-col divide-x border-x transition-all',
+          className
+        )}
         style={{ gridTemplateColumns }}
       >
         {children}

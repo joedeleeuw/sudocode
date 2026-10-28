@@ -56,11 +56,18 @@ const api: AxiosInstance = axios.create({
   },
 })
 
+export const PROJECT_ID_STORAGE_KEY = 'sudocode:currentProjectId'
+
 /**
  * Current project ID for injecting into requests
  * Updated by setCurrentProjectId function
  */
 let currentProjectId: string | null = null
+try {
+  currentProjectId = localStorage.getItem(PROJECT_ID_STORAGE_KEY)
+} catch (error) {
+  console.error('Failed to read project ID from localStorage:', error)
+}
 
 /**
  * Set the current project ID for API requests
@@ -260,8 +267,7 @@ export const executionsApi = {
     post<Execution>(`/issues/${issueId}/executions`, request),
 
   // Create and start an adhoc execution (not tied to an issue)
-  createAdhoc: (request: CreateExecutionRequest) =>
-    post<Execution>(`/executions`, request),
+  createAdhoc: (request: CreateExecutionRequest) => post<Execution>(`/executions`, request),
 
   // Get execution by ID
   getById: (executionId: string) => get<Execution>(`/executions/${executionId}`),
@@ -688,12 +694,10 @@ export const importApi = {
     post<ImportResponse>('/import', { url, options }),
 
   // Search for entities in external systems
-  search: (params: ImportSearchRequest) =>
-    post<ImportSearchResponse>('/import/search', params),
+  search: (params: ImportSearchRequest) => post<ImportSearchResponse>('/import/search', params),
 
   // Batch import entities (creates or updates)
-  batchImport: (params: BatchImportRequest) =>
-    post<BatchImportResponse>('/import/batch', params),
+  batchImport: (params: BatchImportRequest) => post<BatchImportResponse>('/import/batch', params),
 }
 
 /**

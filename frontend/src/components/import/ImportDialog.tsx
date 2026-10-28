@@ -20,14 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  AlertCircle,
-  Loader2,
-  Search,
-  ExternalLink,
-  FileText,
-  CheckCircle2,
-} from 'lucide-react'
+import { AlertCircle, Loader2, Search, ExternalLink, FileText, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   useImportPreview,
@@ -119,19 +112,6 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     }
   }, [open])
 
-  // Auto-load issues after reset when we can browse
-  // Uses a small delay to ensure reset has completed
-  useEffect(() => {
-    if (!open || !canBrowseRepo || !selectedProvider) return
-
-    const timer = setTimeout(() => {
-      handleSearch(false)
-    }, 50)
-
-    return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, canBrowseRepo, selectedProvider])
-
   const handleClose = useCallback(() => {
     if (previewMutation.isPending || searchMutation.isPending || batchImportMutation.isPending) {
       return // Don't close while operations are in progress
@@ -146,101 +126,118 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   }
 
   // Handle URL preview
-  const handleUrlPreview = async (url: string) => {
-    setState('loading')
-    setError(null)
+  const handleUrlPreview = useCallback(
+    async (url: string) => {
+      setState('loading')
+      setError(null)
 
-    try {
-      const result = await previewMutation.mutateAsync(url)
+      try {
+        const result = await previewMutation.mutateAsync(url)
 
-      // Auto-select it
-      setSelectedIds(new Set([result.entity.id]))
-      setSearchResults([result.entity])
-      setState('results')
-    } catch (err) {
-      setState('error')
-      const message = err instanceof Error ? err.message : 'Failed to fetch preview'
-      setError(message)
-    }
-  }
+        // Auto-select it
+        setSelectedIds(new Set([result.entity.id]))
+        setSearchResults([result.entity])
+        setState('results')
+      } catch (err) {
+        setState('error')
+        const message = err instanceof Error ? err.message : 'Failed to fetch preview'
+        setError(message)
+      }
+    },
+    [previewMutation.mutateAsync]
+  )
 
   // Handle search
-  const handleSearch = async (loadMore = false) => {
-    const trimmedInput = input.trim()
-    const inputIsUrl = isUrl(trimmedInput)
+  const handleSearch = useCallback(
+    async (searchInput: string, page: number) => {
+      const loadMore = page > 1
+      const trimmedInput = searchInput.trim()
+      const inputIsUrl = isUrl(trimmedInput)
 
-    // If it looks like a URL, use preview instead
-    if (inputIsUrl && !loadMore) {
-      await handleUrlPreview(trimmedInput)
-      return
-    }
-
-    // Need either a query or ability to browse repo
-    if (!selectedProvider || (!trimmedInput && !canBrowseRepo)) {
-      return
-    }
-
-    if (loadMore) {
-      setIsLoadingMore(true)
-    } else {
-      setState('loading')
-      setCurrentPage(1)
-      setSelectedIds(new Set())
-    }
-    setError(null)
-
-    try {
-      const page = loadMore ? currentPage + 1 : 1
-
-      // Build search params
-      let searchQuery: string | undefined
-      let repo: string | undefined
-
-      if (trimmedInput) {
-        // User provided a query
-        searchQuery = trimmedInput
-        // For GitHub, scope to current repo if not already specified
-        if (
-          selectedProvider === 'github' &&
-          repoInfo?.gitProvider === 'github' &&
-          repoInfo?.ownerRepo &&
-          !searchQuery.toLowerCase().includes('repo:')
-        ) {
-          searchQuery = `repo:${repoInfo.ownerRepo} ${searchQuery}`
-        }
-      } else if (canBrowseRepo) {
-        // No query, but can list from repo
-        repo = repoInfo!.ownerRepo
+      // If it looks like a URL, use preview instead
+      if (inputIsUrl && !loadMore) {
+        await handleUrlPreview(trimmedInput)
+        return
       }
 
-      const result = await searchMutation.mutateAsync({
-        provider: selectedProvider,
-        query: searchQuery,
-        repo,
-        page,
-        perPage: 20,
-      })
+      // Need either a query or ability to browse repo
+      if (!selectedProvider || (!trimmedInput && !canBrowseRepo)) {
+        return
+      }
 
       if (loadMore) {
-        setSearchResults((prev) => [...prev, ...result.results])
+        setIsLoadingMore(true)
       } else {
-        setSearchResults(result.results)
+        setState('loading')
+        setCurrentPage(1)
+        setSelectedIds(new Set())
       }
+      setError(null)
 
-      setCurrentPage(page)
-      setHasMore(result.pagination?.hasMore ?? false)
-      setState('results')
-    } catch (err) {
-      setState('error')
-      const message = err instanceof Error ? err.message : 'Search failed'
-      setError(message)
-    } finally {
-      setIsLoadingMore(false)
-    }
-  }
+      try {
+        // Build search params
+        let searchQuery: string | undefined
+        let repo: string | undefined
+
+        if (trimmedInput) {
+          // User provided a query
+          searchQuery = trimmedInput
+          // For GitHub, scope to current repo if not already specified
+          if (
+            selectedProvider === 'github' &&
+            repoInfo?.gitProvider === 'github' &&
+            repoInfo?.ownerRepo &&
+            !searchQuery.toLowerCase().includes('repo:')
+          ) {
+            searchQuery = `repo:${repoInfo.ownerRepo} ${searchQuery}`
+          }
+        } else if (canBrowseRepo) {
+          // No query, but can list from repo
+          repo = repoInfo!.ownerRepo
+        }
+
+        const result = await searchMutation.mutateAsync({
+          provider: selectedProvider,
+          query: searchQuery,
+          repo,
+          page,
+          perPage: 20,
+        })
+
+        if (loadMore) {
+          setSearchResults((prev) => [...prev, ...result.results])
+        } else {
+          setSearchResults(result.results)
+        }
+
+        setCurrentPage(page)
+        setHasMore(result.pagination?.hasMore ?? false)
+        setState('results')
+      } catch (err) {
+        setState('error')
+        const message = err instanceof Error ? err.message : 'Search failed'
+        setError(message)
+      } finally {
+        setIsLoadingMore(false)
+      }
+    },
+    [canBrowseRepo, handleUrlPreview, repoInfo, searchMutation.mutateAsync, selectedProvider]
+  )
+
+  // Auto-load issues after reset when we can browse
+  // Uses a small delay to ensure reset has completed
+  useEffect(() => {
+    if (!open || !canBrowseRepo || !selectedProvider) return
+
+    const timer = setTimeout(() => {
+      handleSearch('', 1)
+    }, 50)
+
+    return () => clearTimeout(timer)
+  }, [open, canBrowseRepo, selectedProvider, handleSearch])
 
   const handleLoadMore = () => {
-    handleSearch(true)
+    handleSearch(input, currentPage + 1)
   }
 
   // Toggle selection
@@ -312,7 +309,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      handleSearch(false)
+      handleSearch(input, 1)
     }
     if (e.key === 'Escape') {
       handleClose()
@@ -377,7 +374,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               {/* Search Button */}
               <Button
                 variant="outline"
-                onClick={() => handleSearch(false)}
+                onClick={() => handleSearch(input, 1)}
                 disabled={isLoading || (!input.trim() && !canBrowseRepo)}
               >
                 {isLoading && !isLoadingMore ? (

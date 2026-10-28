@@ -31,7 +31,7 @@ function parseAnchor(anchor: string | undefined): FeedbackAnchor | null {
  * Hook for tracking vertical positions of feedback anchors in the document
  *
  * Returns a Map of feedback IDs to their vertical positions (top offset from editor)
- * Updates positions on scroll, resize, and feedback changes with debouncing
+ * Updates positions on scroll, resize, editor mutations, and feedback changes with debouncing
  *
  * @param feedback Array of feedback items to track
  * @param editorRef Ref to the editor element containing the document
@@ -39,7 +39,7 @@ function parseAnchor(anchor: string | undefined): FeedbackAnchor | null {
  */
 export function useFeedbackPositions(
   feedback: IssueFeedback[],
-  editorRef: RefObject<HTMLElement>
+  editorRef: RefObject<HTMLElement | null>
 ): Map<string, number> {
   const [positions, setPositions] = useState<Map<string, number>>(new Map())
   const updateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -138,13 +138,22 @@ export function useFeedbackPositions(
       rafRef.current = requestAnimationFrame(updatePositions)
     }
 
-    // Debounced version only for resize (scroll uses RAF)
-    const debouncedResize = debounce(updatePositions, 100)
+    // Debounced resize and editor updates (scroll uses RAF)
+    const debouncedUpdate = debounce(updatePositions, 100)
 
     // Setup event listeners
     const editor = editorRef.current
+    const mutationObserver = new MutationObserver(debouncedUpdate)
+    if (editor) {
+      mutationObserver.observe(editor, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-line-number', 'data-feedback-id'],
+      })
+    }
     editor?.addEventListener('scroll', handleScroll, { passive: true })
-    window.addEventListener('resize', debouncedResize)
+    window.addEventListener('resize', debouncedUpdate)
 
     // Initial update (immediate, not debounced)
     // Delay slightly to allow DOM to render
@@ -152,8 +161,9 @@ export function useFeedbackPositions(
 
     // Cleanup
     return () => {
+      mutationObserver.disconnect()
       editor?.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', debouncedResize)
+      window.removeEventListener('resize', debouncedUpdate)
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current)
       }

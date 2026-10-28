@@ -1,8 +1,10 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react'
 import type { ProjectInfo, OpenProjectInfo } from '@/types/project'
-import { setCurrentProjectId as setApiProjectId, projectsApi } from '@/lib/api'
-
-const PROJECT_ID_STORAGE_KEY = 'sudocode:currentProjectId'
+import {
+  PROJECT_ID_STORAGE_KEY,
+  setCurrentProjectId as setApiProjectId,
+  projectsApi,
+} from '@/lib/api'
 
 export interface ProjectContextValue {
   /** Currently selected project ID */
@@ -53,9 +55,13 @@ export function ProjectProvider({
 
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null)
   const [isValidatingProject, setIsValidatingProject] = useState(false)
+  const hasValidatedStoredProjectRef = useRef(false)
 
   // Validate and auto-open last selected project on mount
   useEffect(() => {
+    if (hasValidatedStoredProjectRef.current) return
+    hasValidatedStoredProjectRef.current = true
+
     const validateStoredProject = async () => {
       // Skip if validation disabled (tests)
       if (skipValidation) {
@@ -95,9 +101,7 @@ export function ProjectProvider({
     }
 
     validateStoredProject()
-    // Only run on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [currentProjectId, isValidatingProject, skipValidation])
 
   // Persist to localStorage and update API client whenever currentProjectId changes
   useEffect(() => {

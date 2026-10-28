@@ -128,7 +128,7 @@ export function IssueCard({
       parent={status}
       onClick={handleClick}
       isOpen={isOpen}
-      forwardedRef={localRef}
+      ref={localRef}
       className={issue.archived ? 'opacity-60' : ''}
       style={workflowBorderStyle}
     >

@@ -288,7 +288,7 @@ interface ManualFormProps {
   setPriority: (v: number) => void
   viewMode: 'formatted' | 'markdown'
   setViewMode: (v: 'formatted' | 'markdown') => void
-  textareaRef: React.RefObject<HTMLTextAreaElement>
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>
   error: string | null
   isCreating: boolean
   spec?: Spec

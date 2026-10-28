@@ -114,7 +114,7 @@ export default function SpecDetailPage() {
     const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY)
     if (stored !== null) {
       const parsed = JSON.parse(stored)
-      if (parsed === 'formatted' || parsed === 'source' || parsed === 'breadboard') return parsed
+      if (parsed === 'formatted' || parsed === 'source') return parsed
     }
     return 'formatted'
   })
@@ -342,21 +342,32 @@ Create actionable issues that implement its requirements. Each issue should be s
     localStorage.setItem(SHOW_FEEDBACK_STORAGE_KEY, JSON.stringify(showFeedbackPanel))
   }, [showFeedbackPanel])
 
-  // Save view mode preference to localStorage
+  // Save text view preference to localStorage; the URL owns breadboard mode.
   useEffect(() => {
-    localStorage.setItem(VIEW_MODE_STORAGE_KEY, JSON.stringify(viewMode))
+    if (viewMode === 'breadboard') {
+      localStorage.removeItem(VIEW_MODE_STORAGE_KEY)
+    } else {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, JSON.stringify(viewMode))
+    }
   }, [viewMode])
 
   useEffect(() => {
-    if (searchParams.get('view') === 'breadboard') setViewMode('breadboard')
-  }, [searchParams])
+    const requested = searchParams.get('view')
+    if (requested === 'breadboard') setViewMode('breadboard')
+    else if (requested === null && viewMode === 'breadboard') setViewMode('formatted')
+  }, [searchParams, viewMode])
 
   const breadboardProjection = useMemo(() => readSpecBreadboard(content), [content])
   const activeViewMode =
     viewMode === 'breadboard' && breadboardProjection.status === 'absent' ? 'formatted' : viewMode
 
+  useEffect(() => {
+    if (activeViewMode === 'breadboard') setShowFeedbackPanel(false)
+  }, [activeViewMode])
+
   const handleViewModeChange = (mode: 'formatted' | 'source' | 'breadboard') => {
     setViewMode(mode)
+    if (mode === 'breadboard') setShowFeedbackPanel(false)
     const next = new URLSearchParams(searchParams)
     if (mode === 'breadboard') next.set('view', mode)
     else next.delete('view')

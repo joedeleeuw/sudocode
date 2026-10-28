@@ -536,7 +536,9 @@ export default function RelationshipMapPage() {
                         }`
                   }
                 >
-                  Open {selectedEntity.type}
+                  {selectedEntity.type === 'spec' && selectedBreadboard?.status !== 'absent'
+                    ? 'Open breadboard'
+                    : `Open ${selectedEntity.type}`}
                 </Link>
               </Button>
             </div>

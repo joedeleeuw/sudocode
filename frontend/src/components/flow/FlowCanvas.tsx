@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react'
+import { useCallback, useMemo, type ReactNode } from 'react'
 import {
   ReactFlow,
   Background,
   Controls,
-  useNodesState,
-  useEdgesState,
   type Node,
   type Edge,
   type NodeMouseHandler,
@@ -17,6 +15,8 @@ import { layoutFlow, type FlowDimensions } from './layout'
 type FlowCanvasProps = {
   nodes: Node[]
   edges: Edge[]
+  layoutEdges?: Edge[]
+  routeEdges?: (edges: Edge[], nodes: Node[]) => Edge[]
   nodeTypes: NodeTypes
   dimensions: (node: Node) => FlowDimensions
   direction?: 'TB' | 'LR'
@@ -33,6 +33,8 @@ type FlowCanvasProps = {
 export function FlowCanvas({
   nodes: sourceNodes,
   edges: sourceEdges,
+  layoutEdges,
+  routeEdges,
   nodeTypes,
   dimensions,
   direction = 'TB',
@@ -46,18 +48,13 @@ export function FlowCanvas({
   className,
 }: FlowCanvasProps) {
   const { actualTheme } = useTheme()
-  const initial = useMemo(
-    () => layoutFlow(sourceNodes, sourceEdges, direction, dimensions),
-    [sourceNodes, sourceEdges, direction, dimensions]
-  )
-  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges)
-
-  useEffect(() => {
-    const laidOut = layoutFlow(sourceNodes, sourceEdges, direction, dimensions)
-    setNodes(laidOut.nodes)
-    setEdges(laidOut.edges)
-  }, [sourceNodes, sourceEdges, direction, dimensions, setNodes, setEdges])
+  const { nodes, edges } = useMemo(() => {
+    const laidOut = layoutFlow(sourceNodes, layoutEdges ?? sourceEdges, direction, dimensions)
+    return {
+      nodes: laidOut.nodes,
+      edges: routeEdges ? routeEdges(sourceEdges, laidOut.nodes) : laidOut.edges,
+    }
+  }, [sourceNodes, sourceEdges, layoutEdges, routeEdges, direction, dimensions])
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
@@ -71,8 +68,6 @@ export function FlowCanvas({
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={interactive ? onNodesChange : undefined}
-        onEdgesChange={interactive ? onEdgesChange : undefined}
         onNodeClick={handleNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
@@ -93,7 +88,7 @@ export function FlowCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Background color={actualTheme === 'dark' ? '#334155' : '#e2e8f0'} gap={16} size={1} />
-        {showControls && <Controls showInteractive={false} />}
+        {showControls && <Controls showInteractive={false} position="top-right" />}
         {miniMap}
       </ReactFlow>
     </div>

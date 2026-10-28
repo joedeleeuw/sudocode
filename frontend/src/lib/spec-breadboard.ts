@@ -1,7 +1,7 @@
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
-import type { Content, PhrasingContent, Root, Table, TableCell } from 'mdast'
+import type { PhrasingContent, Root, RootContent, Table, TableCell } from 'mdast'
 
 type SectionId = 'current' | 'target'
 type AffordanceKind = 'ui' | 'code' | 'store'
@@ -83,9 +83,8 @@ function placeIds(section: SectionId, value: string, id: string): string[] {
 function wireTargets(value: string | undefined): string[] {
   if (!value || value === '—' || value === '-') return []
   return value
-    .replace(/^->\s*/, '')
     .split(',')
-    .map((target) => target.trim())
+    .map((target) => target.trim().replace(/^->\s*/, ''))
     .filter(Boolean)
 }
 
@@ -98,10 +97,10 @@ function sectionId(title: string): SectionId | null {
 
 function affordanceKind(title: string): AffordanceKind | 'places' | null {
   const normalized = title.trim().toLowerCase()
-  if (normalized === 'places') return 'places'
-  if (normalized === 'ui / cli affordances') return 'ui'
-  if (normalized === 'code affordances') return 'code'
-  if (normalized === 'stores' || normalized === 'data stores') return 'store'
+  if (normalized === 'places (p)') return 'places'
+  if (normalized === 'ui / cli affordances (u)') return 'ui'
+  if (normalized === 'code affordances (n)') return 'code'
+  if (normalized === 'data stores (s)') return 'store'
   return null
 }
 
@@ -112,7 +111,7 @@ function readPlaces(section: SectionId, table: Table): BreadboardPlace[] {
     return {
       id,
       name: requiredCell(section, row, 'place', id),
-      description: row.description ?? row.responsibility ?? '',
+      description: requiredCell(section, row, 'description', id),
     }
   })
 }
@@ -125,15 +124,19 @@ function readAffordances(
   return tableRows(table).map((cells) => {
     const row = rowRecord(cells)
     const id = requiredCell(section, row, 'id', kind)
-    const labelField = kind === 'ui' ? 'affordance' : kind === 'code' ? 'component / seam' : 'store'
-    const label = row[labelField] ?? row['store / boundary schema'] ?? row.component ?? row.store
-    if (!label?.trim()) throw new Error(`${section} breadboard row ${id} is missing its label.`)
+    const labelField =
+      kind === 'ui'
+        ? 'affordance'
+        : kind === 'code'
+          ? 'component / seam'
+          : 'store / boundary schema'
+    const label = requiredCell(section, row, labelField, id)
     return {
       id,
       kind,
       placeIds: placeIds(section, requiredCell(section, row, 'place', id), id),
-      label: label.trim(),
-      ...(row.owner ? { owner: row.owner } : {}),
+      label,
+      ...(kind === 'ui' ? {} : { owner: requiredCell(section, row, 'owner', id) }),
       wiresOut: wireTargets(row['wires out']),
       returnsTo: wireTargets(row['returns to']),
     }
@@ -180,7 +183,7 @@ function parseSections(root: Root): SpecBreadboardSection[] {
   let activeSection: SpecBreadboardSection | null = null
   let activeTable: AffordanceKind | 'places' | null = null
 
-  for (const node of root.children as Content[]) {
+  for (const node of root.children as RootContent[]) {
     if (node.type === 'heading') {
       const title = node.children.map(phrasingText).join('').trim()
       if (node.depth === 2) {
@@ -188,7 +191,7 @@ function parseSections(root: Root): SpecBreadboardSection[] {
         activeSection = id ? { id, places: [], affordances: [] } : null
         activeTable = null
         if (activeSection) sections.push(activeSection)
-      } else if (node.depth === 3) {
+      } else if (node.depth === 4) {
         activeTable = activeSection ? affordanceKind(title) : null
       } else {
         activeTable = null
@@ -208,7 +211,7 @@ function parseSections(root: Root): SpecBreadboardSection[] {
 }
 
 export function readSpecBreadboard(content: string) {
-  const root = markdown.parse(content) as Root
+  const root = markdown.parse(content)
   const declared = root.children.some(
     (node) =>
       node.type === 'heading' &&

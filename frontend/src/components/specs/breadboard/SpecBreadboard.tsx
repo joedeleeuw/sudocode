@@ -15,7 +15,7 @@ function flowElements(section: SpecBreadboardSection) {
   for (const row of section.affordances) ownerByTarget.set(row.id, row.placeIds[0])
 
   const nodes: Node[] = section.places.map((place) => {
-    const affordances = section.affordances.filter((row) => row.placeIds.includes(place.id))
+    const affordances = section.affordances.filter((row) => row.placeIds[0] === place.id)
     const data: BreadboardPlaceData = {
       place,
       affordances,
@@ -36,18 +36,20 @@ function flowElements(section: SpecBreadboardSection) {
         if (!sourceNode || !targetNode) {
           throw new Error(`Breadboard wire ${row.id} → ${target} has no place owner.`)
         }
-        const color = 'hsl(var(--muted-foreground))'
+        const color =
+          kind === 'out' ? 'hsl(var(--foreground) / 0.7)' : 'hsl(var(--muted-foreground) / 0.55)'
         edges.push({
           id: `${row.id}-${kind}-${target}`,
           source: sourceNode,
           target: targetNode,
-          sourceHandle: `${row.id}:out`,
-          targetHandle: `${target}:in`,
+          sourceHandle: row.id,
+          targetHandle: target,
           type: 'smoothstep',
+          data: { kind },
           style: {
             stroke: color,
             strokeWidth: kind === 'out' ? 1.5 : 1.25,
-            ...(kind === 'return' ? { strokeDasharray: '6 4' } : {}),
+            ...(kind === 'return' ? { strokeDasharray: '4 3' } : {}),
           },
           markerEnd: { type: MarkerType.ArrowClosed, color },
         })
@@ -57,12 +59,32 @@ function flowElements(section: SpecBreadboardSection) {
   return { nodes, edges }
 }
 
+function routeBreadboardEdges(edges: Edge[], nodes: Node[]) {
+  const positions = new Map(nodes.map((node) => [node.id, node.position.x]))
+  return edges.map((edge) => {
+    const sourceX = positions.get(edge.source)
+    const targetX = positions.get(edge.target)
+    if (sourceX === undefined || targetX === undefined) {
+      throw new Error(`Breadboard edge ${edge.id} has no laid-out endpoint.`)
+    }
+    const backward = targetX < sourceX
+    const samePlace = edge.source === edge.target
+    const sourceSide = backward || samePlace ? 'left' : 'right'
+    const targetSide = backward ? 'right' : 'left'
+    return {
+      ...edge,
+      sourceHandle: `${edge.sourceHandle}:out-${sourceSide}`,
+      targetHandle: `${edge.targetHandle}:in-${targetSide}`,
+    }
+  })
+}
+
 export function SpecBreadboard({ projection }: { projection: SpecBreadboardProjection }) {
-  const [selectedId, setSelectedId] = useState<'current' | 'target' | null>(null)
+  const [selectedId, setSelectedId] = useState<SpecBreadboardSection['id'] | null>(null)
   if (projection.status === 'absent') return null
   if (projection.status === 'invalid') {
     return (
-      <Card className="p-6" role="alert">
+      <Card className="p-6">
         <div className="font-medium text-destructive">Invalid breadboard</div>
         <div className="mt-2 text-sm text-muted-foreground">{projection.message}</div>
       </Card>
@@ -87,34 +109,67 @@ function BreadboardSectionView({
   onSelect,
 }: {
   section: SpecBreadboardSection
-  availableIds: ('current' | 'target')[]
-  onSelect: (id: 'current' | 'target') => void
+  availableIds: SpecBreadboardSection['id'][]
+  onSelect: (id: SpecBreadboardSection['id']) => void
 }) {
   const { nodes, edges } = useMemo(() => flowElements(section), [section])
+  const layoutEdges = useMemo(() => edges.filter((edge) => edge.data?.kind === 'out'), [edges])
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="flex gap-1" aria-label="Breadboard version">
+        <div className="flex gap-1" role="group" aria-label="Breadboard version">
           {availableIds.map((id) => (
             <Button
               key={id}
               variant={section.id === id ? 'secondary' : 'ghost'}
               size="sm"
+              aria-pressed={section.id === id}
               onClick={() => onSelect(id)}
             >
               {id === 'current' ? 'Current' : 'Target'}
             </Button>
           ))}
         </div>
-        <div className="flex gap-3 text-xs text-muted-foreground" aria-label="Wire legend">
-          <span>→ wires out</span>
-          <span>⇢ returns to</span>
+        <div
+          className="flex gap-3 text-xs text-muted-foreground"
+          role="group"
+          aria-label="Wire legend"
+        >
+          <span className="flex items-center gap-1">
+            <svg width="24" height="6" aria-hidden="true">
+              <line
+                x1="0"
+                y1="3"
+                x2="24"
+                y2="3"
+                stroke="hsl(var(--foreground) / 0.7)"
+                strokeWidth="1.5"
+              />
+            </svg>
+            calls / navigates
+          </span>
+          <span className="flex items-center gap-1">
+            <svg width="24" height="6" aria-hidden="true">
+              <line
+                x1="0"
+                y1="3"
+                x2="24"
+                y2="3"
+                stroke="hsl(var(--muted-foreground) / 0.55)"
+                strokeWidth="1.25"
+                strokeDasharray="4 3"
+              />
+            </svg>
+            returns result to
+          </span>
         </div>
       </div>
       <div className="h-[70vh] min-h-[32rem] overflow-hidden rounded-md border bg-background">
         <FlowCanvas
           nodes={nodes}
           edges={edges}
+          layoutEdges={layoutEdges}
+          routeEdges={routeBreadboardEdges}
           nodeTypes={nodeTypes}
           dimensions={breadboardDimensions}
           direction="LR"

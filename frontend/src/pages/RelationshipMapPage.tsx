@@ -24,6 +24,7 @@ import { useProjectRoutes } from '@/hooks/useProjectRoutes'
 import { useTheme } from '@/contexts/ThemeContext'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import type { EntityType, Issue, RelationshipType, Spec, WebSocketMessage } from '@/types/api'
+import { readSpecBreadboard } from '@/lib/spec-breadboard'
 
 interface MapNode {
   /** `${entityType}:${entityId}` */
@@ -183,6 +184,11 @@ export default function RelationshipMapPage() {
   const graphData = useMemo(() => JSON.parse(topology) as GraphData<MapNode, MapLink>, [topology])
 
   const selectedEntity = selectedNodeId ? entitiesByNodeId.get(selectedNodeId) : undefined
+  const selectedBreadboard = useMemo(
+    () =>
+      selectedEntity?.type === 'spec' ? readSpecBreadboard(selectedEntity.entity.content) : null,
+    [selectedEntity]
+  )
   const hoveredEntity = hoveredNodeId ? entitiesByNodeId.get(hoveredNodeId) : undefined
   const focusNodeId = selectedEntity ? selectedNodeId : hoveredEntity ? hoveredNodeId : null
 
@@ -525,7 +531,9 @@ export default function RelationshipMapPage() {
                   to={
                     selectedEntity.type === 'issue'
                       ? paths.issue(selectedEntity.entity.id)
-                      : paths.spec(selectedEntity.entity.id)
+                      : `${paths.spec(selectedEntity.entity.id)}${
+                          selectedBreadboard?.status !== 'absent' ? '?view=breadboard' : ''
+                        }`
                   }
                 >
                   Open {selectedEntity.type}

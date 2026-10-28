@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 import { useSpec, useSpecFeedback, useSpecs } from '@/hooks/useSpecs'
 import { useSpecRelationships } from '@/hooks/useSpecRelationships'
@@ -46,6 +46,7 @@ import {
   ArrowLeft,
   Lightbulb,
   Loader2,
+  Network,
 } from 'lucide-react'
 import type { IssueFeedback, Relationship, EntityType, RelationshipType } from '@/types/api'
 import type { WorkflowSource } from '@/types/workflow'
@@ -57,6 +58,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { TocItem } from '@/components/specs/TiptapEditor'
+import { SpecBreadboard } from '@/components/specs/breadboard/SpecBreadboard'
+import { readSpecBreadboard } from '@/lib/spec-breadboard'
 
 const PRIORITY_OPTIONS = [
   { value: '0', label: 'Critical (P0)' },
@@ -73,6 +76,7 @@ const SHOW_TOC_STORAGE_KEY = 'sudocode:specs:showTocPanel'
 export default function SpecDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { paths } = useProjectRoutes()
   const { spec, isLoading, isError } = useSpec(id || '')
   const { feedback } = useSpecFeedback(id || '')
@@ -105,9 +109,14 @@ export default function SpecDetailPage() {
     const stored = localStorage.getItem(SHOW_FEEDBACK_STORAGE_KEY)
     return stored !== null ? JSON.parse(stored) : true
   })
-  const [viewMode, setViewMode] = useState<'formatted' | 'source'>(() => {
+  const [viewMode, setViewMode] = useState<'formatted' | 'source' | 'breadboard'>(() => {
+    if (searchParams.get('view') === 'breadboard') return 'breadboard'
     const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY)
-    return stored !== null ? JSON.parse(stored) : 'formatted'
+    if (stored !== null) {
+      const parsed = JSON.parse(stored)
+      if (parsed === 'formatted' || parsed === 'source' || parsed === 'breadboard') return parsed
+    }
+    return 'formatted'
   })
   const [showTocPanel, setShowTocPanel] = useState(() => {
     const stored = localStorage.getItem(SHOW_TOC_STORAGE_KEY)
@@ -337,6 +346,22 @@ Create actionable issues that implement its requirements. Each issue should be s
   useEffect(() => {
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, JSON.stringify(viewMode))
   }, [viewMode])
+
+  useEffect(() => {
+    if (searchParams.get('view') === 'breadboard') setViewMode('breadboard')
+  }, [searchParams])
+
+  const breadboardProjection = useMemo(() => readSpecBreadboard(content), [content])
+  const activeViewMode =
+    viewMode === 'breadboard' && breadboardProjection.status === 'absent' ? 'formatted' : viewMode
+
+  const handleViewModeChange = (mode: 'formatted' | 'source' | 'breadboard') => {
+    setViewMode(mode)
+    const next = new URLSearchParams(searchParams)
+    if (mode === 'breadboard') next.set('view', mode)
+    else next.delete('view')
+    setSearchParams(next, { replace: true })
+  }
 
   // Save TOC panel preference to localStorage
   useEffect(() => {
@@ -644,11 +669,7 @@ Create actionable issues that implement its requirements. Each issue should be s
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    onClick={handleCopyId}
-                    className="flex-shrink-0"
-                    type="button"
-                  >
+                  <button onClick={handleCopyId} className="flex-shrink-0" type="button">
                     <Badge variant="spec" className="cursor-pointer font-mono hover:opacity-80">
                       {spec.id}
                     </Badge>
@@ -715,7 +736,8 @@ Create actionable issues that implement its requirements. Each issue should be s
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    View {runningWorkflowForSpec.status === 'paused' ? 'paused' : 'running'} workflow
+                    View {runningWorkflowForSpec.status === 'paused' ? 'paused' : 'running'}{' '}
+                    workflow
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -816,7 +838,7 @@ Create actionable issues that implement its requirements. Each issue should be s
         </div>
 
         {/* Table of Contents FAB - Only in formatted mode */}
-        {viewMode === 'formatted' && tocItems.length > 0 && !showTocPanel && (
+        {activeViewMode === 'formatted' && tocItems.length > 0 && !showTocPanel && (
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -838,7 +860,7 @@ Create actionable issues that implement its requirements. Each issue should be s
       <div className="flex flex-1 overflow-hidden">
         <div className="flex w-full 2xl:mx-auto 2xl:max-w-[128rem]">
           {/* Table of Contents Panel - Only on xl+ screens */}
-          {showTocPanel && viewMode === 'formatted' && (
+          {showTocPanel && activeViewMode === 'formatted' && (
             <div className="hidden w-64 flex-shrink-0 flex-col overflow-y-auto border-r bg-background xl:flex">
               <TableOfContentsPanel
                 items={tocItems}
@@ -1061,8 +1083,9 @@ Create actionable issues that implement its requirements. Each issue should be s
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
-                              onClick={() => setViewMode('formatted')}
-                              className={`rounded p-1 ${viewMode === 'formatted' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                              aria-label="Formatted spec"
+                              onClick={() => handleViewModeChange('formatted')}
+                              className={`rounded p-1 ${activeViewMode === 'formatted' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                             >
                               <FileText className="h-4 w-4" />
                             </button>
@@ -1072,14 +1095,29 @@ Create actionable issues that implement its requirements. Each issue should be s
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
-                              onClick={() => setViewMode('source')}
-                              className={`rounded p-1 ${viewMode === 'source' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                              aria-label="Markdown spec"
+                              onClick={() => handleViewModeChange('source')}
+                              className={`rounded p-1 ${activeViewMode === 'source' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                             >
                               <Code2 className="h-4 w-4" />
                             </button>
                           </TooltipTrigger>
                           <TooltipContent>Markdown</TooltipContent>
                         </Tooltip>
+                        {breadboardProjection.status !== 'absent' && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                aria-label="Spec breadboard"
+                                onClick={() => handleViewModeChange('breadboard')}
+                                className={`rounded p-1 ${activeViewMode === 'breadboard' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                              >
+                                <Network className="h-4 w-4" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Breadboard</TooltipContent>
+                          </Tooltip>
+                        )}
                       </div>
                     </TooltipProvider>
                   </div>
@@ -1101,18 +1139,22 @@ Create actionable issues that implement its requirements. Each issue should be s
 
                 {/* Content */}
                 {content !== undefined ? (
-                  <SpecViewerTiptap
-                    content={content}
-                    feedback={feedback}
-                    selectedLine={selectedLine}
-                    onLineClick={handleLineClick}
-                    onTextSelect={handleTextSelect}
-                    onFeedbackClick={handleFeedbackClick}
-                    onChange={handleContentChange}
-                    viewMode={viewMode}
-                    onViewModeChange={setViewMode}
-                    onTocUpdate={handleTocUpdate}
-                  />
+                  activeViewMode === 'breadboard' ? (
+                    <SpecBreadboard projection={breadboardProjection} />
+                  ) : (
+                    <SpecViewerTiptap
+                      content={content}
+                      feedback={feedback}
+                      selectedLine={selectedLine}
+                      onLineClick={handleLineClick}
+                      onTextSelect={handleTextSelect}
+                      onFeedbackClick={handleFeedbackClick}
+                      onChange={handleContentChange}
+                      viewMode={activeViewMode}
+                      onViewModeChange={handleViewModeChange}
+                      onTocUpdate={handleTocUpdate}
+                    />
+                  )
                 ) : (
                   <Card className="p-8 text-center">
                     <p className="text-muted-foreground">No content available for this spec.</p>

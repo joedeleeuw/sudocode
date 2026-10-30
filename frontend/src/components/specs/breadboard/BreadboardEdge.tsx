@@ -143,6 +143,14 @@ export function BreadboardEdge({
     }
     const turn = { x: outer.x, y: outer.y - escapeDistance }
     points = [start, escapedStart, ...route(escapedStart, turn, rectangles), outer, escapedEnd, end]
+  } else if (data.kind === 'return' && sourcePosition !== targetPosition) {
+    const offsets = [
+      { x: escapedEnd.x, y: escapedEnd.y - 10 },
+      { x: escapedEnd.x, y: escapedEnd.y + 10 },
+    ]
+    const lane = offsets.find((candidate) => segmentClear(candidate, escapedEnd, rectangles))
+    if (!lane) throw new Error(`Breadboard return ${id} has no clear channel at its target.`)
+    points = [start, ...route(escapedStart, lane, rectangles), escapedEnd, end]
   } else {
     points = [start, ...route(escapedStart, escapedEnd, rectangles), end]
   }

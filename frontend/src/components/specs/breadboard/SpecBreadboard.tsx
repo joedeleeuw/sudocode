@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { MarkerType, useInternalNode, useReactFlow, type Edge, type Node } from '@xyflow/react'
+import {
+  MarkerType,
+  useInternalNode,
+  useReactFlow,
+  useStore,
+  type Edge,
+  type Node,
+} from '@xyflow/react'
+import { shallow } from 'zustand/shallow'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -92,12 +100,13 @@ function routeBreadboardEdges(edges: Edge[], nodes: Node[]) {
       throw new Error(`Breadboard edge ${edge.id} has no laid-out endpoint.`)
     }
     const backward = targetX < sourceX
-    const samePlace = edge.source === edge.target
+    const sameColumn = sourceX === targetX
     const opposite = { left: 'right', right: 'left' } as const
-    const outgoingSource = backward || samePlace ? 'left' : 'right'
+    const outgoingSource = backward || sameColumn ? 'left' : 'right'
     const outgoingTarget = backward ? 'right' : 'left'
-    const sourceSide = edge.data?.kind === 'return' ? opposite[outgoingSource] : outgoingSource
-    const targetSide = edge.data?.kind === 'return' ? opposite[outgoingTarget] : outgoingTarget
+    const alternate = edge.data?.kind === 'return' && sameColumn
+    const sourceSide = alternate ? opposite[outgoingSource] : outgoingSource
+    const targetSide = alternate ? opposite[outgoingTarget] : outgoingTarget
     return {
       ...edge,
       sourceHandle: `${edge.sourceHandle}:out-${sourceSide}`,
@@ -209,6 +218,16 @@ function BreadboardSectionView({
   onSelect: (id: SpecBreadboardSection['id']) => void
 }) {
   const [focusedPlaceId, setFocusedPlaceId] = useState('')
+  const [graphSize, setGraphSize] = useState({ width: 0, height: 0 })
+  const [canvasWidth, setCanvasWidth] = useState(0)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const observer = new ResizeObserver(([entry]) => setCanvasWidth(entry.contentRect.width))
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [])
   const { nodes, edges } = useMemo(() => flowElements(section, slice), [section, slice])
   const layoutEdges = useMemo(() => edges.filter((edge) => edge.data?.kind === 'out'), [edges])
   return (
@@ -288,7 +307,16 @@ function BreadboardSectionView({
           </span>
         </div>
       )}
-      <div className="h-[clamp(18rem,calc(100dvh-23rem),45rem)] overflow-hidden rounded-md border bg-background">
+      <div
+        ref={canvasRef}
+        className="overflow-hidden rounded-md border bg-background"
+        style={{
+          height:
+            graphSize.width && canvasWidth
+              ? `min(max(18rem, calc(100dvh - 23rem)), ${Math.max(288, ((canvasWidth - 48) * graphSize.height) / graphSize.width + 48)}px)`
+              : 'max(18rem, calc(100dvh - 23rem))',
+        }}
+      >
         {nodes.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">
             No affordances for this slice in {section.id === 'current' ? 'Current' : 'Target'}.
@@ -305,15 +333,54 @@ function BreadboardSectionView({
             direction="LR"
             minimumZoom={0.1}
             minimumFitZoom={0.1}
+            fitPadding="24px"
+            fitView={false}
+            defaultZoom={1}
+            alignColumns
             onNodeSelect={setFocusedPlaceId}
             showControls
           >
+            <BreadboardViewport onGraphSize={setGraphSize} />
             <BreadboardFocus placeId={focusedPlaceId} />
           </FlowCanvas>
         )}
       </div>
     </div>
   )
+}
+
+function BreadboardViewport({
+  onGraphSize,
+}: {
+  onGraphSize: (size: { width: number; height: number }) => void
+}) {
+  const nodes = useStore((state) => [...state.nodeLookup.values()], shallow)
+  const { setViewport } = useReactFlow()
+  const initialized = useRef(false)
+  useEffect(() => {
+    if (!nodes.length || nodes.some((node) => !node.measured.width || !node.measured.height)) return
+    const bounds = nodes.map((node) => {
+      const { width, height } = node.measured
+      if (width === undefined || height === undefined)
+        throw new Error(`Breadboard place ${node.id} has no measured bounds.`)
+      return {
+        x: node.internals.positionAbsolute.x,
+        y: node.internals.positionAbsolute.y,
+        width,
+        height,
+      }
+    })
+    const left = Math.min(...bounds.map((node) => node.x))
+    const top = Math.min(...bounds.map((node) => node.y))
+    const right = Math.max(...bounds.map((node) => node.x + node.width))
+    const bottom = Math.max(...bounds.map((node) => node.y + node.height))
+    onGraphSize({ width: right - left, height: bottom - top })
+    if (!initialized.current) {
+      initialized.current = true
+      void setViewport({ x: 32 - left, y: 32 - top, zoom: 1 })
+    }
+  }, [nodes, onGraphSize, setViewport])
+  return null
 }
 
 function BreadboardFocus({ placeId }: { placeId: string }) {

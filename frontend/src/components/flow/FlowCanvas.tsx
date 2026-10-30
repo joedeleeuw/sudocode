@@ -8,6 +8,7 @@ import {
   type NodeMouseHandler,
   type NodeTypes,
   type EdgeTypes,
+  type FitViewOptions,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useTheme } from '@/contexts/ThemeContext'
@@ -29,6 +30,8 @@ type FlowCanvasProps = {
   defaultZoom?: number
   minimumZoom?: number
   minimumFitZoom?: number
+  fitPadding?: FitViewOptions['padding']
+  alignColumns?: boolean
   showControls?: boolean
   miniMap?: ReactNode
   children?: ReactNode
@@ -51,6 +54,8 @@ export function FlowCanvas({
   defaultZoom,
   minimumZoom = 0.25,
   minimumFitZoom = 0.5,
+  fitPadding,
+  alignColumns = false,
   showControls = true,
   miniMap,
   children,
@@ -58,12 +63,18 @@ export function FlowCanvas({
 }: FlowCanvasProps) {
   const { actualTheme } = useTheme()
   const { nodes, edges } = useMemo(() => {
-    const laidOut = layoutFlow(sourceNodes, layoutEdges ?? sourceEdges, direction, dimensions)
+    const laidOut = layoutFlow(
+      sourceNodes,
+      layoutEdges ?? sourceEdges,
+      direction,
+      dimensions,
+      alignColumns
+    )
     return {
       nodes: laidOut.nodes,
       edges: routeEdges ? routeEdges(sourceEdges, laidOut.nodes) : laidOut.edges,
     }
-  }, [sourceNodes, sourceEdges, layoutEdges, routeEdges, direction, dimensions])
+  }, [sourceNodes, sourceEdges, layoutEdges, routeEdges, direction, dimensions, alignColumns])
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
@@ -84,7 +95,7 @@ export function FlowCanvas({
         colorMode={actualTheme}
         fitView={fitView}
         defaultViewport={defaultZoom === undefined ? undefined : { x: 0, y: 0, zoom: defaultZoom }}
-        fitViewOptions={{ padding: 0.2, minZoom: minimumFitZoom, maxZoom: 1.5 }}
+        fitViewOptions={{ padding: fitPadding ?? 0.2, minZoom: minimumFitZoom, maxZoom: 1.5 }}
         minZoom={minimumZoom}
         maxZoom={2}
         nodesDraggable={false}
@@ -98,7 +109,17 @@ export function FlowCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Background color={actualTheme === 'dark' ? '#334155' : '#e2e8f0'} gap={16} size={1} />
-        {showControls && <Controls showInteractive={false} position="top-right" />}
+        {showControls && (
+          <Controls
+            showInteractive={false}
+            position="top-right"
+            fitViewOptions={
+              fitPadding === undefined
+                ? undefined
+                : { padding: fitPadding, minZoom: minimumFitZoom, maxZoom: 1.5 }
+            }
+          />
+        )}
         {miniMap}
         {children}
       </ReactFlow>

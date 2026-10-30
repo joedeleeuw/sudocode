@@ -39,7 +39,7 @@ function BreadboardPlaceNodeComponent({ data }: NodeProps<Node<BreadboardPlaceDa
             <Handle id={`${row.id}:out-right`} type="source" position={Position.Right} />
             <div className="flex items-start gap-2">
               <span className="font-mono font-medium text-foreground">{row.id}</span>
-              <span className="text-card-foreground">{row.label}</span>
+              <span className="min-w-0 text-card-foreground [overflow-wrap:anywhere]">{row.label}</span>
             </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {row.placeIds.length > 1 && <span>{row.placeIds.join(' / ')}</span>}

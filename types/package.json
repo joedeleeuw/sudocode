@@ -1,6 +1,6 @@
 {
   "name": "@sudocode-ai/types",
-  "version": "0.2.0-joe.6",
+  "version": "0.2.0-joe.7",
   "description": "TypeScript type definitions for sudocode",
   "types": "src/index.d.ts",
   "type": "module",

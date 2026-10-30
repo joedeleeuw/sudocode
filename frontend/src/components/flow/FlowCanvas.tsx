@@ -7,6 +7,7 @@ import {
   type Edge,
   type NodeMouseHandler,
   type NodeTypes,
+  type EdgeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useTheme } from '@/contexts/ThemeContext'
@@ -18,6 +19,7 @@ type FlowCanvasProps = {
   layoutEdges?: Edge[]
   routeEdges?: (edges: Edge[], nodes: Node[]) => Edge[]
   nodeTypes: NodeTypes
+  edgeTypes?: EdgeTypes
   dimensions: (node: Node) => FlowDimensions
   direction?: 'TB' | 'LR'
   onNodeSelect?: (nodeId: string) => void
@@ -25,8 +27,11 @@ type FlowCanvasProps = {
   interactive?: boolean
   fitView?: boolean
   defaultZoom?: number
+  minimumZoom?: number
+  minimumFitZoom?: number
   showControls?: boolean
   miniMap?: ReactNode
+  children?: ReactNode
   className?: string
 }
 
@@ -36,6 +41,7 @@ export function FlowCanvas({
   layoutEdges,
   routeEdges,
   nodeTypes,
+  edgeTypes,
   dimensions,
   direction = 'TB',
   onNodeSelect,
@@ -43,8 +49,11 @@ export function FlowCanvas({
   interactive = true,
   fitView = true,
   defaultZoom,
+  minimumZoom = 0.25,
+  minimumFitZoom = 0.5,
   showControls = true,
   miniMap,
+  children,
   className,
 }: FlowCanvasProps) {
   const { actualTheme } = useTheme()
@@ -71,11 +80,12 @@ export function FlowCanvas({
         onNodeClick={handleNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         colorMode={actualTheme}
         fitView={fitView}
         defaultViewport={defaultZoom === undefined ? undefined : { x: 0, y: 0, zoom: defaultZoom }}
-        fitViewOptions={{ padding: 0.2, minZoom: 0.5, maxZoom: 1.5 }}
-        minZoom={0.25}
+        fitViewOptions={{ padding: 0.2, minZoom: minimumFitZoom, maxZoom: 1.5 }}
+        minZoom={minimumZoom}
         maxZoom={2}
         nodesDraggable={false}
         nodesConnectable={false}
@@ -90,6 +100,7 @@ export function FlowCanvas({
         <Background color={actualTheme === 'dark' ? '#334155' : '#e2e8f0'} gap={16} size={1} />
         {showControls && <Controls showInteractive={false} position="top-right" />}
         {miniMap}
+        {children}
       </ReactFlow>
     </div>
   )

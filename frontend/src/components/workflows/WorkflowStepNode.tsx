@@ -4,7 +4,7 @@
  */
 
 import { memo, useCallback } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
   Clock,
   Circle,
@@ -24,13 +24,13 @@ import { STEP_STATUS_STYLES, STEP_STATUS_LABELS } from '@/types/workflow'
 // Types
 // =============================================================================
 
-export interface WorkflowStepNodeData {
+export type WorkflowStepNodeData = {
   step: WorkflowStep
   issue?: Issue
   isSelected?: boolean
-  outcomeId?: string
+  sliceId?: string
   onSelect?: (stepId: string) => void
-  onOpenOutcome?: (outcomeId: string) => void
+  onOpenSlice?: (sliceId: string) => void
 }
 
 // =============================================================================
@@ -118,10 +118,8 @@ function StatusBadge({ status }: { status: WorkflowStep['status'] }) {
 // Main Component
 // =============================================================================
 
-function WorkflowStepNodeComponent({ data }: NodeProps) {
-  // Cast data to our expected type
-  const nodeData = data as unknown as WorkflowStepNodeData
-  const { step, issue, isSelected, outcomeId, onSelect, onOpenOutcome } = nodeData
+function WorkflowStepNodeComponent({ data }: NodeProps<Node<WorkflowStepNodeData>>) {
+  const { step, issue, isSelected, sliceId, onSelect, onOpenSlice } = data
   const styles = STEP_STATUS_STYLES[step.status] || STEP_STATUS_STYLES.pending
 
   // Direct click handler for reliable selection
@@ -202,21 +200,21 @@ function WorkflowStepNodeComponent({ data }: NodeProps) {
                 {duration}
               </span>
             )}
-            {outcomeId && onOpenOutcome && (
+            {sliceId && onOpenSlice && (
               <button
                 type="button"
-                aria-label={`Open outcome ${outcomeId}`}
+                aria-label={`Open slice ${sliceId}`}
                 className="flex items-center gap-1 text-primary hover:underline"
                 onClick={(event) => {
                   event.stopPropagation()
-                  onOpenOutcome(outcomeId)
+                  onOpenSlice(sliceId)
                 }}
               >
-                <span className="font-mono text-[10px]">{outcomeId}</span>
+                <span className="font-mono text-[10px]">{sliceId}</span>
                 <ExternalLink className="h-3 w-3 opacity-70" />
               </button>
             )}
-            {!outcomeId && step.executionId && <ExternalLink className="h-3 w-3 opacity-50" />}
+            {!sliceId && step.executionId && <ExternalLink className="h-3 w-3 opacity-50" />}
           </div>
         </div>
 

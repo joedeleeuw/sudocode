@@ -60,19 +60,17 @@ export default function WorkflowDetailPage() {
   const { workflow, issues, isLoading, error } = useWorkflow(id)
   const specId = workflow?.source.type === 'spec' ? workflow.source.specId : ''
   const { spec } = useSpec(specId)
-  const outcomeIdByIssueId = useMemo(() => {
+  const sliceIdByIssueId = useMemo(() => {
     if (!spec) return {}
     const projection = readSpecBreadboard(spec.content)
     if (projection.status !== 'available') return {}
     return Object.fromEntries(
-      projection.outcomes.flatMap((outcome) =>
-        outcome.issueId ? [[outcome.issueId, outcome.id]] : []
-      )
+      projection.slices.flatMap((slice) => (slice.issueId ? [[slice.issueId, slice.id]] : []))
     )
   }, [spec])
-  const openOutcome = useCallback(
-    (outcomeId: string) => {
-      navigate(`${paths.spec(specId)}?view=breadboard&outcome=${outcomeId}`)
+  const openSlice = useCallback(
+    (sliceId: string) => {
+      navigate(`${paths.spec(specId)}?view=breadboard&slice=${sliceId}`)
     },
     [navigate, paths, specId]
   )
@@ -488,8 +486,8 @@ export default function WorkflowDetailPage() {
                 selectedStepId={selectedStepId || undefined}
                 onStepSelect={handleStepSelect}
                 onPaneClick={handlePanelClose}
-                outcomeIdByIssueId={outcomeIdByIssueId}
-                onOpenOutcome={openOutcome}
+                sliceIdByIssueId={sliceIdByIssueId}
+                onOpenSlice={openSlice}
               />
               {/* Toggle button when panel is collapsed */}
               {isPanelCollapsed && (selectedStep || hasOrchestrator) && (

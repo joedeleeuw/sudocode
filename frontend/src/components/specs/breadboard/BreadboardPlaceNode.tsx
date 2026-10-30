@@ -18,11 +18,13 @@ function BreadboardPlaceNodeComponent({ data }: NodeProps<Node<BreadboardPlaceDa
       <Handle id={`${place.id}:out-right`} type="source" position={Position.Right} />
       <div className="border-b border-border px-4 py-3">
         <div className="font-mono text-[10px] text-muted-foreground">{place.id}</div>
-        <div className="inline-block border-b border-foreground text-sm font-medium">
+        <div className="inline-block border-b border-foreground text-sm font-medium [overflow-wrap:anywhere]">
           {place.name}
         </div>
         {place.description && (
-          <div className="mt-1 text-xs text-muted-foreground">{place.description}</div>
+          <div className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            {place.description}
+          </div>
         )}
       </div>
       <div>
@@ -30,7 +32,7 @@ function BreadboardPlaceNodeComponent({ data }: NodeProps<Node<BreadboardPlaceDa
           <div
             key={row.id}
             data-affordance-id={row.id}
-            className={`relative px-4 py-3 text-sm ${row.kind === 'store' ? 'bg-muted/40' : ''}`}
+            className={`relative border-b border-border px-4 py-3 text-sm last:border-b-0 ${row.kind === 'store' ? 'bg-muted/40' : ''}`}
             aria-label={`${row.id}: ${row.label}`}
           >
             <Handle id={`${row.id}:in-left`} type="target" position={Position.Left} />
@@ -39,9 +41,11 @@ function BreadboardPlaceNodeComponent({ data }: NodeProps<Node<BreadboardPlaceDa
             <Handle id={`${row.id}:out-right`} type="source" position={Position.Right} />
             <div className="flex items-start gap-2">
               <span className="font-mono font-medium text-foreground">{row.id}</span>
-              <span className="min-w-0 text-card-foreground [overflow-wrap:anywhere]">{row.label}</span>
+              <span className="min-w-0 text-card-foreground [overflow-wrap:anywhere]">
+                {row.label}
+              </span>
             </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
               {row.placeIds.length > 1 && <span>{row.placeIds.join(' / ')}</span>}
               {row.owner && <span>{row.owner}</span>}
               {row.wiresOut.length > 0 && <span>out → {row.wiresOut.join(', ')}</span>}
@@ -50,7 +54,6 @@ function BreadboardPlaceNodeComponent({ data }: NodeProps<Node<BreadboardPlaceDa
           </div>
         ))}
       </div>
-      {affordances.length === 0 && <div className="px-4 py-3 text-xs text-muted-foreground">—</div>}
     </div>
   )
 }

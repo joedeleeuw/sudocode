@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { MiniMap, type Node, type Edge, MarkerType } from '@xyflow/react'
 import type { WorkflowStep } from '@/types/workflow'
 import type { Issue } from '@/types/api'
-import { WorkflowStepNode } from './WorkflowStepNode'
+import { WorkflowStepNode, type WorkflowStepNodeData } from './WorkflowStepNode'
 import { useTheme } from '@/contexts/ThemeContext'
 import { FlowCanvas } from '@/components/flow/FlowCanvas'
 
@@ -25,8 +25,8 @@ export interface WorkflowDAGProps {
   onPaneClick?: () => void
   /** Callback for step actions (retry, skip, cancel) */
   onStepAction?: (stepId: string, action: 'retry' | 'skip' | 'cancel') => void
-  outcomeIdByIssueId?: Record<string, string>
-  onOpenOutcome?: (outcomeId: string) => void
+  sliceIdByIssueId?: Record<string, string>
+  onOpenSlice?: (sliceId: string) => void
   /** Whether the DAG is interactive (default: true) */
   interactive?: boolean
   /** Show minimap (default: true) */
@@ -45,11 +45,11 @@ function stepsToFlowElements(
   issues?: Record<string, Issue>,
   selectedStepId?: string,
   onStepSelect?: (stepId: string) => void,
-  outcomeIdByIssueId?: Record<string, string>,
-  onOpenOutcome?: (outcomeId: string) => void
-): { nodes: Node[]; edges: Edge[] } {
+  sliceIdByIssueId?: Record<string, string>,
+  onOpenSlice?: (sliceId: string) => void
+): { nodes: Node<WorkflowStepNodeData>[]; edges: Edge[] } {
   // Create nodes from steps
-  const nodes: Node[] = steps.map((step) => ({
+  const nodes: Node<WorkflowStepNodeData>[] = steps.map((step) => ({
     id: step.id,
     type: 'workflowStep',
     position: { x: 0, y: 0 }, // Will be calculated by dagre
@@ -57,9 +57,9 @@ function stepsToFlowElements(
       step,
       issue: issues?.[step.issueId],
       isSelected: step.id === selectedStepId,
-      outcomeId: outcomeIdByIssueId?.[step.issueId],
+      sliceId: sliceIdByIssueId?.[step.issueId],
       onSelect: onStepSelect,
-      onOpenOutcome,
+      onOpenSlice,
     },
   }))
 
@@ -114,8 +114,8 @@ export function WorkflowDAG({
   selectedStepId,
   onStepSelect,
   onPaneClick,
-  outcomeIdByIssueId,
-  onOpenOutcome,
+  sliceIdByIssueId,
+  onOpenSlice,
   interactive = true,
   showMinimap = true,
   showControls = true,
@@ -132,10 +132,10 @@ export function WorkflowDAG({
         issues,
         selectedStepId,
         onStepSelect,
-        outcomeIdByIssueId,
-        onOpenOutcome
+        sliceIdByIssueId,
+        onOpenSlice
       ),
-    [steps, issues, selectedStepId, onStepSelect, outcomeIdByIssueId, onOpenOutcome]
+    [steps, issues, selectedStepId, onStepSelect, sliceIdByIssueId, onOpenSlice]
   )
 
   // Empty state
@@ -160,10 +160,9 @@ export function WorkflowDAG({
       className={className}
       miniMap={
         showMinimap ? (
-          <MiniMap
+          <MiniMap<Node<WorkflowStepNodeData>>
             nodeColor={(node) => {
-              const step = node.data?.step as WorkflowStep | undefined
-              if (!step) return '#94a3b8'
+              const step = node.data.step
               switch (step.status) {
                 case 'completed':
                   return '#22c55e'

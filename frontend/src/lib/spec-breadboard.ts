@@ -1,7 +1,7 @@
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
-import type { PhrasingContent, Root, RootContent, Table, TableCell } from 'mdast'
+import type { PhrasingContent, Root, Table, TableCell } from 'mdast'
 
 type SectionId = 'current' | 'target'
 type AffordanceKind = 'ui' | 'code' | 'store'
@@ -28,7 +28,7 @@ export type SpecBreadboardSection = {
   affordances: BreadboardAffordance[]
 }
 
-export type SpecBreadboardOutcome = {
+export type SpecBreadboardSlice = {
   id: string
   title: string
   affordanceIds: string[]
@@ -95,20 +95,50 @@ function wireTargets(value: string | undefined): string[] {
     .filter(Boolean)
 }
 
-function sectionId(title: string): SectionId | null {
-  const normalized = title.trim().toLowerCase()
-  if (normalized === 'current breadboard') return 'current'
-  if (normalized === 'target breadboard') return 'target'
-  return null
+const sectionHeadings = [
+  { heading: 'CURRENT breadboard', id: 'current' },
+  { heading: 'TARGET breadboard', id: 'target' },
+] as const
+
+const tableKinds = [
+  { heading: 'Places (P)', kind: 'places', columns: ['ID', 'Place', 'Description'] },
+  {
+    heading: 'UI / CLI Affordances (U)',
+    kind: 'ui',
+    columns: ['ID', 'Place', 'Affordance', 'Wires Out', 'Returns To'],
+  },
+  {
+    heading: 'Code Affordances (N)',
+    kind: 'code',
+    columns: ['ID', 'Place', 'Component / Seam', 'Owner', 'Wires Out', 'Returns To'],
+  },
+  {
+    heading: 'Data Stores (S)',
+    kind: 'store',
+    columns: ['ID', 'Place', 'Store / Boundary Schema', 'Owner'],
+  },
+] as const
+
+const canonicalHeadings =
+  'Use ## CURRENT breadboard or ## TARGET breadboard, with #### Places (P), #### UI / CLI Affordances (U), #### Code Affordances (N), and #### Data Stores (S).'
+
+function sectionId(title: string) {
+  return sectionHeadings.find((section) => section.heading === title)?.id ?? null
 }
 
-function affordanceKind(title: string): AffordanceKind | 'places' | null {
-  const normalized = title.trim().toLowerCase()
-  if (normalized === 'places (p)') return 'places'
-  if (normalized === 'ui / cli affordances (u)') return 'ui'
-  if (normalized === 'code affordances (n)') return 'code'
-  if (normalized === 'data stores (s)') return 'store'
-  return null
+function affordanceKind(title: string) {
+  return tableKinds.find((table) => table.heading === title)?.kind ?? null
+}
+
+function requireColumns(table: Table, columns: readonly string[], context: string) {
+  const headings = table.children[0]?.children.map(cellText).map((heading) => heading.toLowerCase())
+  for (const column of columns) {
+    if (!headings?.includes(column.toLowerCase())) {
+      throw new Error(
+        `${context} is missing column ${column}. Required columns: ${columns.join(', ')}.`
+      )
+    }
+  }
 }
 
 function readPlaces(section: SectionId, table: Table): BreadboardPlace[] {
@@ -131,12 +161,12 @@ function readAffordances(
   return tableRows(table).map((cells) => {
     const row = rowRecord(cells)
     const id = requiredCell(section, row, 'id', kind)
-    const labelField =
-      kind === 'ui'
-        ? 'affordance'
-        : kind === 'code'
-          ? 'component / seam'
-          : 'store / boundary schema'
+    const labelFields = {
+      ui: 'affordance',
+      code: 'component / seam',
+      store: 'store / boundary schema',
+    } satisfies Record<AffordanceKind, string>
+    const labelField = labelFields[kind]
     const label = requiredCell(section, row, labelField, id)
     return {
       id,
@@ -190,22 +220,44 @@ function parseSections(root: Root): SpecBreadboardSection[] {
   let activeSection: SpecBreadboardSection | null = null
   let activeTable: AffordanceKind | 'places' | null = null
 
-  for (const node of root.children as RootContent[]) {
+  const seenTables = new Map<SectionId, Set<string>>()
+  for (const node of root.children) {
     if (node.type === 'heading') {
       const title = node.children.map(phrasingText).join('').trim()
-      if (node.depth === 2) {
+      if (node.depth === 1) {
+        activeSection = null
+        activeTable = null
+      } else if (node.depth === 2) {
         const id = sectionId(title)
+        if (/breadboard/i.test(title) && !id)
+          throw new Error(`Noncanonical heading ## ${title}. ${canonicalHeadings}`)
+        if (id && seenTables.has(id))
+          throw new Error(`Duplicate ${title} section. ${canonicalHeadings}`)
+        if (id) seenTables.set(id, new Set())
         activeSection = id ? { id, places: [], affordances: [] } : null
         activeTable = null
         if (activeSection) sections.push(activeSection)
       } else if (node.depth === 4) {
-        activeTable = activeSection ? affordanceKind(title) : null
+        const kind = affordanceKind(title)
+        if (kind && !activeSection)
+          throw new Error(
+            `Table heading #### ${title} is outside a canonical section. ${canonicalHeadings}`
+          )
+        activeTable = kind
       } else {
         activeTable = null
       }
       continue
     }
     if (node.type !== 'table' || !activeSection || !activeTable) continue
+    const definition = tableKinds.find((table) => table.kind === activeTable)
+    if (!definition)
+      throw new Error(`Unknown breadboard table ${activeTable}. ${canonicalHeadings}`)
+    const seen = seenTables.get(activeSection.id)
+    if (seen?.has(activeTable))
+      throw new Error(`Duplicate ${definition.heading} table in ${activeSection.id} breadboard.`)
+    seen?.add(activeTable)
+    requireColumns(node, definition.columns, `${activeSection.id} ${definition.heading}`)
     if (activeTable === 'places') {
       activeSection.places.push(...readPlaces(activeSection.id, node))
     } else {
@@ -213,49 +265,68 @@ function parseSections(root: Root): SpecBreadboardSection[] {
     }
   }
 
-  for (const section of sections) validateSection(section)
+  for (const section of sections) {
+    for (const definition of tableKinds) {
+      if (!seenTables.get(section.id)?.has(definition.kind)) {
+        throw new Error(
+          `${section.id} breadboard is missing #### ${definition.heading}. ${canonicalHeadings}`
+        )
+      }
+    }
+    validateSection(section)
+  }
   return sections
 }
 
-function readOutcomes(root: Root, sections: SpecBreadboardSection[]): SpecBreadboardOutcome[] {
-  const outcomes: SpecBreadboardOutcome[] = []
+function readSlices(root: Root, sections: SpecBreadboardSection[]): SpecBreadboardSlice[] {
+  const slices: SpecBreadboardSlice[] = []
   const ids = new Set<string>()
   const affordanceIds = new Set(
     sections.flatMap((section) => section.affordances.map((row) => row.id))
   )
   let active = false
 
-  for (const node of root.children as RootContent[]) {
-    if (node.type === 'heading' && node.depth === 2) {
-      active = node.children.map(phrasingText).join('').trim().toLowerCase() === 'outcomes'
+  for (const node of root.children) {
+    if (node.type === 'heading' && node.depth <= 2) {
+      active = node.depth === 2 && node.children.map(phrasingText).join('').trim() === 'Slices'
       continue
     }
     if (node.type !== 'table' || !active) continue
+    requireColumns(node, ['ID', 'Title', 'Affordances', 'Issue'], '## Slices')
     for (const cells of tableRows(node)) {
       const row = rowRecord(cells)
-      const id = requiredCell('target', row, 'id', 'outcome')
-      if (ids.has(id)) throw new Error(`Duplicate outcome ID ${id}.`)
+      const id = requiredCell('target', row, 'id', 'slice')
+      if (!/^V[1-9][0-9]*$/u.test(id))
+        throw new Error(`Slice ID ${id} is invalid. Use V1, V2, … under ## Slices.`)
+      if (ids.has(id)) throw new Error(`Duplicate slice ID ${id}.`)
       ids.add(id)
-      const title = requiredCell('target', row, 'outcome', id)
-      const issueId = /\[\[(i-[a-z0-9]+)\]\]/u.exec(title)?.[1]
+      const title = requiredCell('target', row, 'title', id)
+      const issue = requiredCell('target', row, 'issue', id)
+      const issueId = /^\[\[(i-[a-z0-9]+)\]\]$/u.exec(issue)?.[1]
+      if (!issueId && issue !== '—')
+        throw new Error(
+          `Slice ${id} Issue token ${issue}: use [[i-xxxx]] or — for an unlinked slice.`
+        )
       const referencedIds = requiredCell('target', row, 'affordances', id)
-        .split(/[\s,]+/u)
+        .split(',')
         .map((part) => part.trim())
-        .filter(Boolean)
+
       for (const referencedId of referencedIds) {
-        if (!affordanceIds.has(referencedId)) {
-          throw new Error(`Outcome ${id} references unknown affordance ${referencedId}.`)
+        if (!/^[UNS][0-9]+$/u.test(referencedId) || !affordanceIds.has(referencedId)) {
+          throw new Error(
+            `Slice ${id} Affordances token "${referencedId}" is invalid. Use exact comma-separated IDs from the breadboard, such as U1, N1, S1; ranges and unknown IDs are not accepted.`
+          )
         }
       }
-      outcomes.push({
+      slices.push({
         id,
-        title: title.replace(/\s*\[\[i-[a-z0-9]+\]\]\s*/u, '').trim(),
+        title,
         affordanceIds: referencedIds,
         ...(issueId ? { issueId } : {}),
       })
     }
   }
-  return outcomes
+  return slices
 }
 
 export function readSpecBreadboard(content: string) {
@@ -263,8 +334,8 @@ export function readSpecBreadboard(content: string) {
   const declared = root.children.some(
     (node) =>
       node.type === 'heading' &&
-      node.depth === 2 &&
-      sectionId(node.children.map(phrasingText).join(''))
+      ((node.depth === 2 && /breadboard/i.test(node.children.map(phrasingText).join(''))) ||
+        (node.depth === 4 && affordanceKind(node.children.map(phrasingText).join(''))))
   )
   if (!declared) return { status: 'absent' as const }
   try {
@@ -272,7 +343,7 @@ export function readSpecBreadboard(content: string) {
     return {
       status: 'available' as const,
       sections,
-      outcomes: readOutcomes(root, sections),
+      slices: readSlices(root, sections),
     }
   } catch (cause) {
     return {

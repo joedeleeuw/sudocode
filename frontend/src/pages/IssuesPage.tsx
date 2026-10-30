@@ -207,9 +207,7 @@ export default function IssuesPage() {
       }
     }
     setHasInitializedFromUrl(true)
-    // Only run once when issues are loaded
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [issues.length > 0])
+  }, [issues, location.hash, hasInitializedFromUrl])
 
   // Update URL hash when selected issue changes (but only after initialization)
   useEffect(() => {

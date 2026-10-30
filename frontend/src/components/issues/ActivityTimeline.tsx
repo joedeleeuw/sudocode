@@ -26,7 +26,7 @@ interface ActivityTimelineProps {
   items: ActivityItem[]
   currentEntityId: string
   className?: string
-  lastFeedbackRef?: React.RefObject<HTMLDivElement>
+  lastFeedbackRef?: React.RefObject<HTMLDivElement | null>
 }
 
 /**

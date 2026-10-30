@@ -44,6 +44,8 @@ import {
 } from '@/hooks/useWorkflows'
 import { useExecutionChanges } from '@/hooks/useExecutionChanges'
 import { useExecutionSync } from '@/hooks/useExecutionSync'
+import { useSpec } from '@/hooks/useSpecs'
+import { readSpecBreadboard } from '@/lib/spec-breadboard'
 import { executionsApi } from '@/lib/api'
 import { WORKFLOW_STATUS_COLORS, WORKFLOW_STATUS_LABELS } from '@/types/workflow'
 import { cn } from '@/lib/utils'
@@ -56,6 +58,22 @@ export default function WorkflowDetailPage() {
   const navigate = useNavigate()
   const { paths } = useProjectRoutes()
   const { workflow, issues, isLoading, error } = useWorkflow(id)
+  const specId = workflow?.source.type === 'spec' ? workflow.source.specId : ''
+  const { spec } = useSpec(specId)
+  const sliceIdByIssueId = useMemo(() => {
+    if (!spec) return {}
+    const projection = readSpecBreadboard(spec.content)
+    if (projection.status !== 'available') return {}
+    return Object.fromEntries(
+      projection.slices.flatMap((slice) => (slice.issueId ? [[slice.issueId, slice.id]] : []))
+    )
+  }, [spec])
+  const openSlice = useCallback(
+    (sliceId: string) => {
+      navigate(`${paths.spec(specId)}?view=breadboard&slice=${sliceId}`)
+    },
+    [navigate, paths, specId]
+  )
   const { start, pause, resume, cancel, isStarting, isResuming } = useWorkflowMutations()
   const [showResumeDialog, setShowResumeDialog] = useState(false)
   const progress = useWorkflowProgress(workflow)
@@ -468,6 +486,8 @@ export default function WorkflowDetailPage() {
                 selectedStepId={selectedStepId || undefined}
                 onStepSelect={handleStepSelect}
                 onPaneClick={handlePanelClose}
+                sliceIdByIssueId={sliceIdByIssueId}
+                onOpenSlice={openSlice}
               />
               {/* Toggle button when panel is collapsed */}
               {isPanelCollapsed && (selectedStep || hasOrchestrator) && (

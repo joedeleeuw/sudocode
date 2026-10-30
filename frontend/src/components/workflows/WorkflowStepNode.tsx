@@ -4,7 +4,7 @@
  */
 
 import { memo, useCallback } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
   Clock,
   Circle,
@@ -24,11 +24,13 @@ import { STEP_STATUS_STYLES, STEP_STATUS_LABELS } from '@/types/workflow'
 // Types
 // =============================================================================
 
-export interface WorkflowStepNodeData {
+export type WorkflowStepNodeData = {
   step: WorkflowStep
   issue?: Issue
   isSelected?: boolean
+  sliceId?: string
   onSelect?: (stepId: string) => void
+  onOpenSlice?: (sliceId: string) => void
 }
 
 // =============================================================================
@@ -67,9 +69,9 @@ function StatusIcon({ status, className }: StatusIconProps) {
     case 'pending':
       return <Clock className={cn(iconClass, 'text-muted-foreground')} />
     case 'ready':
-      return <Circle className={cn(iconClass, 'text-blue-500 fill-blue-500/20')} />
+      return <Circle className={cn(iconClass, 'fill-blue-500/20 text-blue-500')} />
     case 'running':
-      return <Loader2 className={cn(iconClass, 'text-blue-500 animate-spin')} />
+      return <Loader2 className={cn(iconClass, 'animate-spin text-blue-500')} />
     case 'completed':
       return <CheckCircle2 className={cn(iconClass, 'text-green-500')} />
     case 'failed':
@@ -116,10 +118,8 @@ function StatusBadge({ status }: { status: WorkflowStep['status'] }) {
 // Main Component
 // =============================================================================
 
-function WorkflowStepNodeComponent({ data }: NodeProps) {
-  // Cast data to our expected type
-  const nodeData = data as unknown as WorkflowStepNodeData
-  const { step, issue, isSelected, onSelect } = nodeData
+function WorkflowStepNodeComponent({ data }: NodeProps<Node<WorkflowStepNodeData>>) {
+  const { step, issue, isSelected, sliceId, onSelect, onOpenSlice } = data
   const styles = STEP_STATUS_STYLES[step.status] || STEP_STATUS_STYLES.pending
 
   // Direct click handler for reliable selection
@@ -142,7 +142,7 @@ function WorkflowStepNodeComponent({ data }: NodeProps) {
         type="target"
         position={Position.Top}
         className={cn(
-          '!h-2.5 !w-2.5 !border-2 !border-background !rounded-full transition-colors',
+          '!h-2.5 !w-2.5 !rounded-full !border-2 !border-background transition-colors',
           step.status === 'completed'
             ? '!bg-green-500'
             : step.status === 'running'
@@ -164,61 +164,67 @@ function WorkflowStepNodeComponent({ data }: NodeProps) {
           isSelected && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
         )}
       >
-            {/* Header: Status icon + Issue ID + Status badge */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <StatusIcon status={step.status} />
-                <span className="font-mono font-medium">{step.issueId}</span>
-              </div>
-              <StatusBadge status={step.status} />
-            </div>
+        {/* Header: Status icon + Issue ID + Status badge */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <StatusIcon status={step.status} />
+            <span className="font-mono font-medium">{step.issueId}</span>
+          </div>
+          <StatusBadge status={step.status} />
+        </div>
 
-            {/* Divider */}
-            <div className="my-2 border-t border-border/50" />
+        {/* Divider */}
+        <div className="my-2 border-t border-border/50" />
 
-            {/* Title */}
-            <div
-              className={cn(
-                'text-sm font-medium leading-tight',
-                styles.text,
-                step.status === 'skipped' && 'line-through opacity-60'
-              )}
-            >
-              {displayTitle}
-            </div>
+        {/* Title */}
+        <div
+          className={cn(
+            'text-sm font-medium leading-tight',
+            styles.text,
+            step.status === 'skipped' && 'line-through opacity-60'
+          )}
+        >
+          {displayTitle}
+        </div>
 
-            {/* Footer: Agent + Duration */}
-            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-              <div className="flex items-center gap-1.5">
-                {step.agentType && (
-                  <span className="rounded bg-muted px-1.5 py-0.5 font-medium">
-                    {step.agentType}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                {duration && (
-                  <span
-                    className={cn(
-                      step.status === 'running' && 'text-blue-500 animate-pulse'
-                    )}
-                  >
-                    {duration}
-                  </span>
-                )}
-                {step.executionId && (
-                  <ExternalLink className="h-3 w-3 opacity-50" />
-                )}
-              </div>
-            </div>
-
-            {/* Error indicator (if failed) */}
-            {step.status === 'failed' && step.error && (
-              <div className="mt-2 flex items-start gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive">
-                <XCircle className="h-3 w-3 mt-0.5 shrink-0" />
-                <span className="line-clamp-2">{step.error}</span>
-              </div>
+        {/* Footer: Agent + Duration */}
+        <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            {step.agentType && (
+              <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{step.agentType}</span>
             )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {duration && (
+              <span className={cn(step.status === 'running' && 'animate-pulse text-blue-500')}>
+                {duration}
+              </span>
+            )}
+            {sliceId && onOpenSlice && (
+              <button
+                type="button"
+                aria-label={`Open slice ${sliceId}`}
+                className="flex items-center gap-1 text-primary hover:underline"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onOpenSlice(sliceId)
+                }}
+              >
+                <span className="font-mono text-[10px]">{sliceId}</span>
+                <ExternalLink className="h-3 w-3 opacity-70" />
+              </button>
+            )}
+            {!sliceId && step.executionId && <ExternalLink className="h-3 w-3 opacity-50" />}
+          </div>
+        </div>
+
+        {/* Error indicator (if failed) */}
+        {step.status === 'failed' && step.error && (
+          <div className="mt-2 flex items-start gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive">
+            <XCircle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span className="line-clamp-2">{step.error}</span>
+          </div>
+        )}
       </div>
 
       {/* Output handle (bottom) */}
@@ -226,7 +232,7 @@ function WorkflowStepNodeComponent({ data }: NodeProps) {
         type="source"
         position={Position.Bottom}
         className={cn(
-          '!h-2.5 !w-2.5 !border-2 !border-background !rounded-full transition-colors',
+          '!h-2.5 !w-2.5 !rounded-full !border-2 !border-background transition-colors',
           step.status === 'completed'
             ? '!bg-green-500'
             : step.status === 'running'

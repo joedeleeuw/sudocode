@@ -45,6 +45,11 @@
   "author": "sudocode AI",
   "license": "Apache-2.0",
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint-plugin-react": "^7.37.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^5.3.3"
   }
 }

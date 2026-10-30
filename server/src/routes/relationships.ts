@@ -10,6 +10,7 @@ import {
   createRelationship,
   deleteRelationship,
   getEntityRelationships,
+  getAllProjectRelationships,
   getEntityOutgoingRelationships,
   getEntityIncomingRelationships,
 } from "../services/relationships.js";
@@ -18,6 +19,26 @@ import { triggerExport } from "../services/export.js";
 
 export function createRelationshipsRouter(): Router {
   const router = Router();
+
+  /**
+   * GET /api/relationships - Get every relationship in the project
+   */
+  router.get("/", (req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        data: getAllProjectRelationships(req.project!.db),
+      });
+    } catch (error) {
+      console.error("Error listing relationships:", error);
+      res.status(500).json({
+        success: false,
+        data: null,
+        error_data: error instanceof Error ? error.message : String(error),
+        message: "Failed to list relationships",
+      });
+    }
+  });
 
   /**
    * GET /api/relationships/:entity_type/:entity_id - Get all relationships for an entity

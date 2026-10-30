@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@/contexts/ThemeContext'
@@ -22,6 +23,9 @@ import ExecutionsPage from '@/pages/ExecutionsPage'
 import WorkflowsPage from '@/pages/WorkflowsPage'
 import WorkflowDetailPage from '@/pages/WorkflowDetailPage'
 import { cleanExpiredDrafts } from '@/hooks/usePersistedDraft'
+
+// The relationship map pulls in three.js; load it only when the map route is opened
+const RelationshipMapPage = lazy(() => import('@/pages/RelationshipMapPage'))
 
 // Prune stale draft entries from localStorage on startup
 cleanExpiredDrafts()
@@ -138,6 +142,16 @@ function App() {
                         element={
                           <ProtectedRoute>
                             <WorkflowDetailPage />
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="map"
+                        element={
+                          <ProtectedRoute>
+                            <Suspense fallback={null}>
+                              <RelationshipMapPage />
+                            </Suspense>
                           </ProtectedRoute>
                         }
                       />

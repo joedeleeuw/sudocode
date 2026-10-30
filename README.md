@@ -66,6 +66,8 @@ Once you have a dependency graph of issues, you can also automate the implementa
   <img src="media/screenshots/workflow.png" alt="Workflow automation view">
 </div>
 
+The relationship map shows every active issue and spec as a node in a 3D force graph, with blocks, depends-on, implements, and other relationships drawn as colored links. Click a node to see its status and summary and to open it.
+
 If you're up for it, you can even monitor all running agent trajectories at the same time.
 
 <div style="margin: 2em 0;">

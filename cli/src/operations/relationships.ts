@@ -382,6 +382,17 @@ export function getAllRelationships(
 }
 
 /**
+ * List every relationship in the database
+ */
+export function listRelationships(db: Database.Database): Relationship[] {
+  const stmt = db.prepare(`
+    SELECT * FROM relationships
+    ORDER BY created_at DESC, from_id ASC, to_id ASC, relationship_type ASC
+  `);
+  return stmt.all() as Relationship[];
+}
+
+/**
  * Check if a relationship exists
  */
 export function relationshipExists(

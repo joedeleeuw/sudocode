@@ -1,6 +1,7 @@
 import type {
   Issue,
   Spec,
+  Adr,
   Relationship,
   IssueFeedback,
   Execution,
@@ -115,6 +116,19 @@ export interface UpdateSpecRequest {
   archived?: boolean
 }
 
+export type AdrWithState = Adr & { superseded: boolean }
+
+export interface CreateAdrRequest {
+  title: string
+  content?: string
+}
+
+export interface UpdateAdrRequest {
+  title?: string
+  content?: string
+  archived?: boolean
+}
+
 /**
  * Relationship API types
  */
@@ -163,6 +177,9 @@ export interface WebSocketMessage {
     | 'spec_created'
     | 'spec_updated'
     | 'spec_deleted'
+    | 'adr_created'
+    | 'adr_updated'
+    | 'adr_deleted'
     | 'relationship_created'
     | 'relationship_deleted'
     | 'feedback_created'
@@ -200,7 +217,7 @@ export interface WebSocketMessage {
     | 'tts_error'
     | 'error'
   projectId?: string // Project ID for project-scoped messages
-  data?: Issue | Spec | Relationship | IssueFeedback | Execution | any
+  data?: Issue | Spec | Adr | Relationship | IssueFeedback | Execution | any
   message?: string // Error message
   timestamp?: string
   subscription?: string // Subscription key for debugging
@@ -219,7 +236,7 @@ export interface WebSocketMessage {
 export interface WebSocketSubscribeMessage {
   type: 'subscribe' | 'unsubscribe' | 'ping'
   project_id?: string // Required for project-scoped subscriptions
-  entity_type?: 'issue' | 'spec' | 'execution' | 'workflow' | 'all'
+  entity_type?: 'issue' | 'spec' | 'adr' | 'execution' | 'workflow' | 'all'
   entity_id?: string
 }
 
@@ -251,6 +268,7 @@ export interface GetAgentsResponse {
 export type {
   Issue,
   Spec,
+  Adr,
   Relationship,
   IssueFeedback,
   Execution,

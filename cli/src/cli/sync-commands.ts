@@ -11,7 +11,9 @@ import { importFromJSONL } from "../import.js";
 import { startWatcher, setupGracefulShutdown } from "../watcher.js";
 import { syncMarkdownToJSONL, syncJSONLToMarkdown } from "../sync.js";
 import { listSpecs } from "../operations/specs.js";
+import { listAdrs } from "../operations/adrs.js";
 import { listIssues } from "../operations/issues.js";
+import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
 import {
   generateUniqueFilename,
   findExistingEntityFile,
@@ -90,7 +92,7 @@ export async function handleSync(
     await handleSyncToMarkdown(ctx);
   } else {
     // Auto-detect sync direction based on file modification times
-    // TODO: Independently handle sync direction from specs and issues.
+    // TODO: Independently handle sync direction for each entity type.
     const { direction, reason } = determineSyncDirection(ctx);
 
     console.log(chalk.blue("Detecting sync direction..."));
@@ -178,9 +180,6 @@ export async function handleImport(
 async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
   console.log(chalk.blue("Syncing from markdown to database..."));
 
-  const specsDir = path.join(ctx.outputDir, "specs");
-  const issuesDir = path.join(ctx.outputDir, "issues");
-
   let syncedCount = 0;
   let errorCount = 0;
 
@@ -191,53 +190,22 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
     writeBackFrontmatter: true,
   };
 
-  // Sync specs
-  if (fs.existsSync(specsDir)) {
-    const specFiles = findMarkdownFiles(specsDir);
-    console.log(chalk.gray(`  Found ${specFiles.length} spec files`));
-
-    for (const file of specFiles) {
+  for (const row of ENTITY_ROWS) {
+    const entityDir = path.join(ctx.outputDir, row.markdownDir);
+    if (!fs.existsSync(entityDir)) continue;
+    const files = findMarkdownFiles(entityDir);
+    console.log(chalk.gray(`  Found ${files.length} ${row.type} files`));
+    for (const file of files) {
       const result = await syncMarkdownToJSONL(ctx.db, file, syncOptions);
-
       if (result.success) {
         syncedCount++;
         console.log(
-          chalk.gray(
-            `  ✓ ${result.action} ${result.entityType} ${result.entityId}`
-          )
+          chalk.gray(`  ✓ ${result.action} ${result.entityType} ${result.entityId}`)
         );
       } else {
         errorCount++;
         console.log(
-          chalk.red(
-            `  ✗ Failed to sync ${path.basename(file)}: ${result.error}`
-          )
-        );
-      }
-    }
-  }
-
-  // Sync issues
-  if (fs.existsSync(issuesDir)) {
-    const issueFiles = findMarkdownFiles(issuesDir);
-    console.log(chalk.gray(`  Found ${issueFiles.length} issue files`));
-
-    for (const file of issueFiles) {
-      const result = await syncMarkdownToJSONL(ctx.db, file, syncOptions);
-
-      if (result.success) {
-        syncedCount++;
-        console.log(
-          chalk.gray(
-            `  ✓ ${result.action} ${result.entityType} ${result.entityId}`
-          )
-        );
-      } else {
-        errorCount++;
-        console.log(
-          chalk.red(
-            `  ✗ Failed to sync ${path.basename(file)}: ${result.error}`
-          )
+          chalk.red(`  ✗ Failed to sync ${path.basename(file)}: ${result.error}`)
         );
       }
     }
@@ -261,42 +229,47 @@ async function handleSyncFromMarkdown(ctx: CommandContext): Promise<void> {
 async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
   console.log(chalk.blue("Syncing from database to markdown..."));
 
-  const specsDir = path.join(ctx.outputDir, "specs");
-  const issuesDir = path.join(ctx.outputDir, "issues");
-
-  // Ensure directories exist
-  fs.mkdirSync(specsDir, { recursive: true });
-  fs.mkdirSync(issuesDir, { recursive: true });
+  for (const row of ENTITY_ROWS) {
+    fs.mkdirSync(path.join(ctx.outputDir, row.markdownDir), { recursive: true });
+  }
+  const issuesDir = path.join(
+    ctx.outputDir,
+    getEntityRow("issue").markdownDir
+  );
 
   let syncedCount = 0;
   let errorCount = 0;
 
-  // Sync all specs
-  const specs = listSpecs(ctx.db, {});
-  console.log(chalk.gray(`  Found ${specs.length} specs in database`));
-
-  for (const spec of specs) {
-    // Check if file exists at stored path, otherwise use syncFileWithRename
-    let filePath = path.join(ctx.outputDir, spec.file_path);
-    if (!fs.existsSync(filePath)) {
-      // Find existing file, rename if title changed, or generate new filename
-      filePath = syncFileWithRename(spec.id, specsDir, spec.title);
-    }
-
-    const result = await syncJSONLToMarkdown(ctx.db, spec.id, "spec", filePath);
-
-    if (result.success) {
-      syncedCount++;
-      console.log(
-        chalk.gray(
-          `  ✓ ${result.action} spec ${spec.id} → ${path.basename(filePath)}`
-        )
-      );
-    } else {
-      errorCount++;
-      console.log(
-        chalk.red(`  ✗ Failed to sync spec ${spec.id}: ${result.error}`)
-      );
+  const documents: Array<{
+    entityType: "spec" | "adr";
+    entities: Array<{ id: string; title: string; file_path: string }>;
+  }> = [
+    { entityType: "spec", entities: listSpecs(ctx.db) },
+    { entityType: "adr", entities: listAdrs(ctx.db) },
+  ];
+  for (const { entityType, entities } of documents) {
+    console.log(chalk.gray(`  Found ${entities.length} ${entityType} records in database`));
+    const entityDir = path.join(
+      ctx.outputDir,
+      getEntityRow(entityType).markdownDir
+    );
+    for (const document of entities) {
+      let filePath = path.join(ctx.outputDir, document.file_path);
+      if (!fs.existsSync(filePath)) {
+        filePath = syncFileWithRename(document.id, entityDir, document.title);
+      }
+      const result = await syncJSONLToMarkdown(ctx.db, document.id, entityType, filePath);
+      if (result.success) {
+        syncedCount++;
+        console.log(
+          chalk.gray(`  ✓ ${result.action} ${entityType} ${document.id} → ${path.basename(filePath)}`)
+        );
+      } else {
+        errorCount++;
+        console.log(
+          chalk.red(`  ✗ Failed to sync ${entityType} ${document.id}: ${result.error}`)
+        );
+      }
     }
   }
 
@@ -388,19 +361,6 @@ function getMostRecentModTime(files: string[]): Date | null {
 }
 
 /**
- * Get modification time of a file
- * Returns null if file doesn't exist
- */
-function getFileModTime(filePath: string): Date | null {
-  try {
-    const stats = fs.statSync(filePath);
-    return stats.mtime;
-  } catch (error) {
-    return null;
-  }
-}
-
-/**
  * Determine sync direction based on config and timestamps
  * Direction depends on sourceOfTruth setting:
  * - "jsonl" (default): Use timestamp comparison, prefer DB in conflicts
@@ -420,115 +380,52 @@ function determineSyncDirection(ctx: CommandContext): {
     };
   }
 
-  // JSONL/DB is source of truth - use timestamp comparison
-  const specsDir = path.join(ctx.outputDir, "specs");
-  const issuesDir = path.join(ctx.outputDir, "issues");
-  const specsJsonl = path.join(ctx.outputDir, "specs.jsonl");
-  const issuesJsonl = path.join(ctx.outputDir, "issues.jsonl");
-
-  // Get JSONL modification times
-  const specsJsonlTime = getFileModTime(specsJsonl);
-  const issuesJsonlTime = getFileModTime(issuesJsonl);
-
-  // Get markdown file times
-  let specMarkdownFiles: string[] = [];
-  let issueMarkdownFiles: string[] = [];
-
-  if (fs.existsSync(specsDir)) {
-    specMarkdownFiles = findMarkdownFiles(specsDir);
-  }
-  if (fs.existsSync(issuesDir)) {
-    issueMarkdownFiles = findMarkdownFiles(issuesDir);
-  }
-
-  const specsMarkdownTime = getMostRecentModTime(specMarkdownFiles);
-  const issuesMarkdownTime = getMostRecentModTime(issueMarkdownFiles);
-
-  // Get the most recent updated_at timestamp from database
-  const specs = listSpecs(ctx.db, {});
-  const issues = listIssues(ctx.db, {});
-
-  const dbSpecsTime =
-    specs.length > 0
-      ? new Date(
-          Math.max(...specs.map((s: any) => new Date(s.updated_at).getTime()))
-        )
-      : null;
-  const dbIssuesTime =
-    issues.length > 0
-      ? new Date(
-          Math.max(...issues.map((i: any) => new Date(i.updated_at).getTime()))
-        )
-      : null;
-
-  // Determine sync direction
   let syncToMarkdown = false;
   let syncFromMarkdown = false;
   const reasons: string[] = [];
+  const entityStates: Array<{
+    row: ReturnType<typeof getEntityRow>;
+    entities: Array<{ updated_at: string }>;
+  }> = [
+    { row: getEntityRow("spec"), entities: listSpecs(ctx.db) },
+    { row: getEntityRow("issue"), entities: listIssues(ctx.db) },
+    { row: getEntityRow("adr"), entities: listAdrs(ctx.db) },
+  ];
 
-  // Check specs
-  if (!dbSpecsTime && !specsMarkdownTime) {
-    // Neither exists - no sync needed
-    reasons.push("No spec files or database entries found");
-  } else if (!dbSpecsTime && specsMarkdownTime) {
-    // Only markdown exists - sync from markdown
-    syncFromMarkdown = true;
-    reasons.push("Specs database empty, markdown exists");
-  } else if (dbSpecsTime && !specsMarkdownTime) {
-    // Only database exists - sync to markdown
-    syncToMarkdown = true;
-    reasons.push("Spec markdown files missing, database has entries");
-  } else if (dbSpecsTime && specsMarkdownTime) {
-    // Both exist - compare markdown file time against database time
-    if (specsMarkdownTime > dbSpecsTime) {
-      syncFromMarkdown = true;
-      reasons.push(
-        `Spec markdown files are newer than database (${formatTime(
-          specsMarkdownTime
-        )} > ${formatTime(dbSpecsTime)})`
-      );
-    } else if (dbSpecsTime > specsMarkdownTime) {
-      syncToMarkdown = true;
-      reasons.push(
-        `Spec database is newer than markdown files (${formatTime(dbSpecsTime)} > ${formatTime(
-          specsMarkdownTime
-        )})`
-      );
-    } else {
-      reasons.push("Specs are in sync");
-    }
-  }
+  for (const { row, entities } of entityStates) {
+    const entityDir = path.join(ctx.outputDir, row.markdownDir);
+    const markdownFiles = fs.existsSync(entityDir)
+      ? findMarkdownFiles(entityDir)
+      : [];
+    const markdownTime = getMostRecentModTime(markdownFiles);
+    const dbTime = entities.length > 0
+      ? new Date(
+          Math.max(...entities.map((entity) => new Date(entity.updated_at).getTime()))
+        )
+      : null;
 
-  // Check issues
-  if (!dbIssuesTime && !issuesMarkdownTime) {
-    // Neither exists - no sync needed
-    reasons.push("No issue files or database entries found");
-  } else if (!dbIssuesTime && issuesMarkdownTime) {
-    // Only markdown exists - sync from markdown
-    syncFromMarkdown = true;
-    reasons.push("Issues database empty, markdown exists");
-  } else if (dbIssuesTime && !issuesMarkdownTime) {
-    // Only database exists - sync to markdown
-    syncToMarkdown = true;
-    reasons.push("Issue markdown files missing, database has entries");
-  } else if (dbIssuesTime && issuesMarkdownTime) {
-    // Both exist - compare markdown file time against database time
-    if (issuesMarkdownTime > dbIssuesTime) {
+    if (!dbTime && !markdownTime) {
+      reasons.push(`No ${row.type} files or database entries found`);
+    } else if (!dbTime && markdownTime) {
       syncFromMarkdown = true;
-      reasons.push(
-        `Issue markdown files are newer than database (${formatTime(
-          issuesMarkdownTime
-        )} > ${formatTime(dbIssuesTime)})`
-      );
-    } else if (dbIssuesTime > issuesMarkdownTime) {
+      reasons.push(`${row.pluralLabel} database empty, markdown exists`);
+    } else if (dbTime && !markdownTime) {
       syncToMarkdown = true;
-      reasons.push(
-        `Issue database is newer than markdown files (${formatTime(dbIssuesTime)} > ${formatTime(
-          issuesMarkdownTime
-        )})`
-      );
-    } else {
-      reasons.push("Issues are in sync");
+      reasons.push(`${row.label} markdown files missing, database has entries`);
+    } else if (dbTime && markdownTime) {
+      if (markdownTime > dbTime) {
+        syncFromMarkdown = true;
+        reasons.push(
+          `${row.label} markdown files are newer than database (${formatTime(markdownTime)} > ${formatTime(dbTime)})`
+        );
+      } else if (dbTime > markdownTime) {
+        syncToMarkdown = true;
+        reasons.push(
+          `${row.label} database is newer than markdown files (${formatTime(dbTime)} > ${formatTime(markdownTime)})`
+        );
+      } else {
+        reasons.push(`${row.pluralLabel} are in sync`);
+      }
     }
   }
 

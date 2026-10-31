@@ -18,20 +18,28 @@ import {
   updateSpec,
 } from "./operations/specs.js";
 import { getIssue, createIssue, updateIssue } from "./operations/issues.js";
+import {
+  getAdr,
+  getAdrByFilePath,
+  createAdr,
+  updateAdr,
+} from "./operations/adrs.js";
+import { getEntity } from "./operations/entities.js";
 import { addRelationship } from "./operations/relationships.js";
 import { getTags, setTags } from "./operations/tags.js";
 import { listFeedback, updateFeedback } from "./operations/feedback.js";
 import { relocateFeedbackAnchor } from "./operations/feedback-anchors.js";
 import { exportToJSONL } from "./export.js";
-import { generateSpecId, generateIssueId } from "./id-generator.js";
-import type { Spec, Issue, IssueStatus } from "@sudocode-ai/types";
-import { isValidIssueStatus } from "./validation.js";
+import { generateEntityId } from "./id-generator.js";
+import type { Adr, EntityType, Spec, Issue, IssueStatus } from "@sudocode-ai/types";
+import { ENTITY_ROWS, parseEntityType } from "@sudocode-ai/types/entities";
+import { isValidIssueStatus, isValidRelationshipType } from "./validation.js";
 
 export interface MarkdownSyncResult {
   success: boolean;
   action: "created" | "updated" | "no-change";
   entityId: string;
-  entityType: "spec" | "issue";
+  entityType: EntityType;
   error?: string;
 }
 
@@ -78,9 +86,9 @@ function cleanFrontmatterForMarkdown(
 function initializeFrontmatter(
   db: Database.Database,
   data: Record<string, any>,
-  entityType: "spec" | "issue",
+  entityType: EntityType,
   mdPath: string,
-  outputDir: string,
+  _outputDir: string,
   _user: string
 ): Record<string, any> {
   const now = new Date().toISOString();
@@ -88,10 +96,7 @@ function initializeFrontmatter(
 
   // Generate ID and UUID if missing
   if (!initialized.id) {
-    const generated =
-      entityType === "spec"
-        ? generateSpecId(db, outputDir)
-        : generateIssueId(db, outputDir);
+    const generated = generateEntityId(db, entityType);
     initialized.id = generated.id;
     initialized.uuid = generated.uuid;
   }
@@ -117,8 +122,7 @@ function initializeFrontmatter(
   if (entityType === "spec") {
     if (!initialized.priority && initialized.priority !== 0)
       initialized.priority = 2;
-  } else {
-    // issue
+  } else if (entityType === "issue") {
     if (!initialized.status) initialized.status = "open";
     if (!initialized.priority && initialized.priority !== 0)
       initialized.priority = 2;
@@ -162,19 +166,18 @@ export async function syncMarkdownToJSONL(
 
     // For specs, determine which spec this file corresponds to
     // Support two scenarios: rename (ID stays, path changes) and path-based lookup (no ID)
-    let existingByPath: any = null;
-    let existingById: any = null;
-    if (entityType === "spec") {
-      // Always set the calculated file path in data (for create/update)
+    let existingByPath: Spec | Adr | null = null;
+    let existingById: Spec | Adr | null = null;
+    if (entityType !== "issue") {
       data.file_path = filePath;
-
-      // Check if a spec exists with this ID (from frontmatter)
       if (frontmatterId) {
-        existingById = getSpec(db, frontmatterId);
+        existingById = entityType === "spec"
+          ? getSpec(db, frontmatterId)
+          : getAdr(db, frontmatterId);
       }
-
-      // Check if a spec exists at this file path
-      existingByPath = getSpecByFilePath(db, filePath);
+      existingByPath = entityType === "spec"
+        ? getSpecByFilePath(db, filePath)
+        : getAdrByFilePath(db, filePath);
 
       // Scenario 1: Spec exists with this ID
       if (existingById) {
@@ -197,16 +200,6 @@ export async function syncMarkdownToJSONL(
       // Scenario 2: No ID in frontmatter, but spec exists at this path
       else if (existingByPath) {
         entityId = existingByPath.id;
-        data.id = entityId;
-      }
-      // Scenario 3: ID in frontmatter differs from spec at this path (user changed ID)
-      else if (frontmatterId && existingByPath) {
-        // This shouldn't happen due to earlier checks, but handle it
-        const correctId = existingByPath.id;
-        console.warn(
-          `[sync] Warning: ID in frontmatter (${frontmatterId}) differs from existing spec ID (${correctId}) for ${filePath}. Using existing ID.`
-        );
-        entityId = correctId;
         data.id = entityId;
       }
     }
@@ -243,8 +236,7 @@ export async function syncMarkdownToJSONL(
     }
 
     // Check if entity exists by ID
-    const existing =
-      entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
+    const existing = getEntity(db, entityId, entityType);
 
     const isNew = !existing;
 
@@ -253,10 +245,11 @@ export async function syncMarkdownToJSONL(
     const fileStat = fs.statSync(mdPath);
     const fileModTime = new Date(fileStat.mtimeMs).toISOString();
 
-    if (entityType === "spec") {
-      await syncSpec(
+    if (entityType !== "issue") {
+      await syncDocument(
         db,
         entityId,
+        entityType,
         data,
         content,
         references,
@@ -308,13 +301,11 @@ export async function syncMarkdownToJSONL(
 export async function syncJSONLToMarkdown(
   db: Database.Database,
   entityId: string,
-  entityType: "spec" | "issue",
+  entityType: EntityType,
   mdPath: string
 ): Promise<MarkdownSyncResult> {
   try {
-    // Get entity from database
-    const entity =
-      entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
+    const entity = getEntity(db, entityId, entityType);
 
     if (!entity) {
       return {
@@ -373,33 +364,30 @@ export async function syncJSONLToMarkdown(
 function determineEntityType(
   frontmatter: Record<string, any>,
   filePath: string
-): "spec" | "issue" {
-  // Check frontmatter type field
-  if (frontmatter.entity_type === "issue") {
-    return "issue";
+): EntityType {
+  const frontmatterType: unknown = frontmatter.entity_type;
+  if (frontmatterType !== undefined) {
+    try {
+      return parseEntityType(frontmatterType);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid entity_type in ${filePath}: ${reason}`);
+    }
   }
-  if (frontmatter.entity_type === "spec") {
-    return "spec";
-  }
-
-  // Check file path
-  if (filePath.includes("/issues/") || filePath.includes("/issue-")) {
-    return "issue";
-  }
-  if (filePath.includes("/specs/") || filePath.includes("/spec-")) {
-    return "spec";
-  }
-
-  // Default to spec
-  return "spec";
+  const normalized = filePath.replaceAll("\\", "/");
+  const row = ENTITY_ROWS.find(
+    (candidate) =>
+      normalized.includes(`/${candidate.markdownDir}/`) ||
+      normalized.includes(`/${candidate.command}-`)
+  );
+  if (!row) throw new Error(`Cannot infer entity type from ${filePath}`);
+  return row.type;
 }
 
-/**
- * Sync spec data to database
- */
-async function syncSpec(
+async function syncDocument(
   db: Database.Database,
   id: string,
+  entityType: "spec" | "adr",
   frontmatter: Record<string, any>,
   content: string,
   references: CrossReference[],
@@ -407,85 +395,74 @@ async function syncSpec(
   user: string,
   fileModTime?: string
 ): Promise<void> {
-  // Get old content before updating (for anchor relocation)
-  const oldSpec = isNew ? null : getSpec(db, id);
-  const oldContent = oldSpec?.content || "";
+  const oldDocument = isNew
+    ? null
+    : entityType === "spec"
+      ? getSpec(db, id)
+      : getAdr(db, id);
+  const oldContent = oldDocument?.content || "";
+  const title = frontmatter.title || "Untitled";
+  const filePath = frontmatter.file_path || "";
+  const contentChanged =
+    oldDocument?.title !== title ||
+    oldDocument?.content !== content ||
+    oldDocument?.file_path !== filePath ||
+    (entityType === "spec" &&
+      oldDocument &&
+      (("priority" in oldDocument &&
+        oldDocument.priority !== (frontmatter.priority ?? 2)) ||
+        ("parent_id" in oldDocument &&
+          oldDocument.parent_id !== (frontmatter.parent_id || undefined))));
+  const updatedAt = contentChanged && fileModTime ? fileModTime : undefined;
 
-  const specData: Partial<Spec> = {
-    id,
-    title: frontmatter.title || "Untitled",
-    file_path: frontmatter.file_path || "",
-    content,
-    priority: frontmatter.priority ?? 2,
-    parent_id: frontmatter.parent_id || undefined,
-  };
-
-  if (isNew) {
-    createSpec(db, {
-      ...specData,
-      updated_at: fileModTime,
-    } as any);
+  if (entityType === "adr") {
+    const input = {
+      title,
+      file_path: filePath,
+      content,
+      archived: frontmatter.archived,
+      archived_at: frontmatter.archived_at,
+    };
+    if (isNew) {
+      createAdr(db, { id, ...input, updated_at: fileModTime });
+    } else {
+      updateAdr(db, id, { ...input, updated_at: updatedAt });
+    }
   } else {
-    // Check if content has actually changed
-    const contentChanged =
-      oldSpec?.title !== specData.title ||
-      oldSpec?.content !== specData.content ||
-      oldSpec?.priority !== specData.priority ||
-      oldSpec?.parent_id !== specData.parent_id ||
-      oldSpec?.file_path !== specData.file_path;
-
-    // Only update timestamp if content actually changed
-    // Note: external_links is handled separately via JSONL import, not markdown sync
-    updateSpec(db, id, {
-      ...specData,
-      ...(contentChanged && fileModTime ? { updated_at: fileModTime } : {}),
-    } as any);
-
-    // Relocate feedback anchors if content changed
-    if (oldContent !== content) {
-      const feedbackList = listFeedback(db, { to_id: id });
-
-      if (feedbackList.length > 0) {
-        // Relocate each feedback anchor
-        for (const feedback of feedbackList) {
-          const oldAnchor =
-            typeof feedback.anchor === "string"
-              ? JSON.parse(feedback.anchor)
-              : feedback.anchor;
-
-          // Skip feedback without anchors - they should be preserved unchanged
-          if (!oldAnchor) {
-            continue;
-          }
-
-          // Relocate the anchor
-          const newAnchor = relocateFeedbackAnchor(
-            oldContent,
-            content,
-            oldAnchor
-          );
-
-          // Update feedback with new anchor (newAnchor is never null here since oldAnchor was checked)
-          if (newAnchor) {
-            updateFeedback(db, feedback.id, {
-              anchor: newAnchor,
-            });
-          }
-        }
-      }
+    const input = {
+      title,
+      file_path: filePath,
+      content,
+      priority: frontmatter.priority ?? 2,
+      parent_id: frontmatter.parent_id || undefined,
+    };
+    if (isNew) {
+      createSpec(db, { id, ...input, updated_at: fileModTime });
+    } else {
+      updateSpec(db, id, { ...input, updated_at: updatedAt });
     }
   }
 
-  // Sync tags
-  if (frontmatter.tags && Array.isArray(frontmatter.tags)) {
-    setTags(db, id, "spec", frontmatter.tags);
+  if (!isNew && oldContent !== content) {
+    const feedbackList = listFeedback(db, { to_id: id });
+    for (const feedback of feedbackList) {
+      const oldAnchor =
+        typeof feedback.anchor === "string"
+          ? JSON.parse(feedback.anchor)
+          : feedback.anchor;
+      if (!oldAnchor) continue;
+      const newAnchor = relocateFeedbackAnchor(oldContent, content, oldAnchor);
+      if (newAnchor) updateFeedback(db, feedback.id, { anchor: newAnchor });
+    }
   }
 
-  // Sync relationships from cross-references
+  if (frontmatter.tags && Array.isArray(frontmatter.tags)) {
+    setTags(db, id, entityType, frontmatter.tags);
+  }
   await syncRelationships(
     db,
     id,
-    "spec",
+    entityType,
     references,
     frontmatter.relationships,
     user
@@ -575,7 +552,7 @@ async function syncIssue(
 async function syncRelationships(
   db: Database.Database,
   entityId: string,
-  entityType: "spec" | "issue",
+  entityType: EntityType,
   references: CrossReference[],
   frontmatterRels?: Array<{
     // Support both formats:
@@ -603,20 +580,17 @@ async function syncRelationships(
     const relType = ref.relationshipType || "references";
     const key = `${relType}:${ref.type}:${ref.id}`;
     if (!existingSet.has(key)) {
-      try {
-        addRelationship(db, {
-          from_id: entityId,
-          from_type: entityType,
-          to_id: ref.id,
-          to_type: ref.type,
-          relationship_type: relType as any,
-          metadata: ref.anchor
-            ? JSON.stringify({ anchor: ref.anchor })
-            : undefined,
-        });
-      } catch (error) {
-        // Ignore errors (e.g., target not found, duplicate)
+      if (!isValidRelationshipType(relType)) {
+        throw new Error(`Invalid relationship type in ${entityId}: ${relType}`);
       }
+      addRelationship(db, {
+        from_id: entityId,
+        from_type: entityType,
+        to_id: ref.id,
+        to_type: ref.type,
+        relationship_type: relType,
+        metadata: ref.anchor ? JSON.stringify({ anchor: ref.anchor }) : undefined,
+      });
     }
   }
 
@@ -626,26 +600,27 @@ async function syncRelationships(
     for (const rel of frontmatterRels) {
       // Support both formats
       const toId = rel.to_id || rel.target_id;
-      const toType = rel.to_type || rel.target_type;
+      const rawTargetType: unknown = rel.to_type || rel.target_type;
 
-      if (!toId || !toType) {
-        // Skip invalid relationships
-        continue;
+      if (!toId || !rawTargetType) {
+        throw new Error(`Invalid relationship target in ${entityId}`);
+      }
+      const targetType = parseEntityType(rawTargetType);
+      if (!isValidRelationshipType(rel.relationship_type)) {
+        throw new Error(
+          `Invalid relationship type in ${entityId}: ${rel.relationship_type}`
+        );
       }
 
-      const key = `${rel.relationship_type}:${toType}:${toId}`;
+      const key = `${rel.relationship_type}:${targetType}:${toId}`;
       if (!existingSet.has(key)) {
-        try {
-          addRelationship(db, {
-            from_id: entityId,
-            from_type: entityType,
-            to_id: toId,
-            to_type: toType as "spec" | "issue",
-            relationship_type: rel.relationship_type as any,
-          });
-        } catch (error) {
-          // Ignore errors
-        }
+        addRelationship(db, {
+          from_id: entityId,
+          from_type: entityType,
+          to_id: toId,
+          to_type: targetType,
+          relationship_type: rel.relationship_type,
+        });
       }
     }
   }
@@ -658,36 +633,31 @@ async function syncRelationships(
  * Convert entity to frontmatter object
  */
 function entityToFrontmatter(
-  entity: Spec | Issue,
-  entityType: "spec" | "issue",
+  entity: Spec | Issue | Adr,
+  entityType: EntityType,
   relationships: Array<any>,
   tags: string[]
 ): Record<string, any> {
   const base: Record<string, any> = {
     id: entity.id,
     title: entity.title,
-    priority: entity.priority,
     created_at: entity.created_at,
   };
-
-  // Only add optional fields if they have values
-  if (entity.parent_id) base.parent_id = entity.parent_id;
+  if ("priority" in entity) base.priority = entity.priority;
+  if ("parent_id" in entity && entity.parent_id) {
+    base.parent_id = entity.parent_id;
+  }
+  if (entity.archived !== undefined) base.archived = entity.archived;
+  if (entity.archived_at) base.archived_at = entity.archived_at;
   if (tags.length > 0) base.tags = tags;
   if (relationships.length > 0) base.relationships = relationships;
+  if (entityType !== "issue") return base;
 
-  if (entityType === "spec") {
-    return base;
-  } else {
-    const issue = entity as Issue;
-    const result: Record<string, any> = {
-      ...base,
-      status: issue.status,
-    };
-
-    // Only add optional issue fields if they have values
-    if (issue.assignee) result.assignee = issue.assignee;
-    if (issue.closed_at) result.closed_at = issue.closed_at;
-
-    return result;
+  if (!("status" in entity)) {
+    throw new Error(`Issue ${entity.id} has no status`);
   }
+  const result: Record<string, any> = { ...base, status: entity.status };
+  if (entity.assignee) result.assignee = entity.assignee;
+  if (entity.closed_at) result.closed_at = entity.closed_at;
+  return result;
 }

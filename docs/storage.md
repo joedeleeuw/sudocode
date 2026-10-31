@@ -58,6 +58,9 @@ This document defines the storage layer for sudocode, inspired by the beads proj
 │   ├── issue-001.md            # Markdown files (git-tracked)
 │   ├── issue-002.md
 │   └── issues.jsonl            # JSONL snapshot (git-tracked)
+├── adrs/
+│   └── storage-format.md       # ADR Markdown mirror
+├── adrs.jsonl                  # ADR snapshot (git-tracked)
 ├── meta.json                   # ID counters, config (git-tracked)
 ├── cache.db                # SQLite cache (gitignored)
 └── .gitignore                  # Ignore *.db
@@ -129,15 +132,15 @@ CREATE INDEX idx_issues_closed_at ON issues(closed_at);
 
 #### 3. Relationships Table (Polymorphic)
 
-Captures edges between any entities (spec→spec, issue→issue, spec→issue).
+Captures edges between specs, issues, and ADRs. `supersedes` is valid only from an ADR to an ADR; other pairs are rejected with a typed error. Incoming `supersedes` links derive an ADR's superseded state.
 
 ```sql
 CREATE TABLE relationships (
     from_id TEXT NOT NULL,
-    from_type TEXT NOT NULL,               -- spec|issue
+    from_type TEXT NOT NULL,               -- spec|issue|adr
     to_id TEXT NOT NULL,
-    to_type TEXT NOT NULL,                 -- spec|issue
-    relationship_type TEXT NOT NULL,       -- blocks|related|parent-child|discovered-from|implements
+    to_type TEXT NOT NULL,                 -- spec|issue|adr
+    relationship_type TEXT NOT NULL,       -- blocks|related|discovered-from|implements|references|depends-on|supersedes
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT NOT NULL,
     metadata TEXT,                          -- Optional JSON metadata
@@ -160,7 +163,7 @@ CREATE INDEX idx_rel_created_at ON relationships(created_at);
 ```sql
 CREATE TABLE tags (
     entity_id TEXT NOT NULL,
-    entity_type TEXT NOT NULL,             -- spec|issue
+    entity_type TEXT NOT NULL,             -- spec|issue|adr
     tag TEXT NOT NULL,
     PRIMARY KEY (entity_id, entity_type, tag)
 );
@@ -175,7 +178,7 @@ CREATE INDEX idx_tags_tag ON tags(tag);
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_id TEXT NOT NULL,
-    entity_type TEXT NOT NULL,             -- spec|issue
+    entity_type TEXT NOT NULL,             -- spec|issue|adr
     event_type TEXT NOT NULL,              -- created|updated|status_changed|relationship_added|etc
     actor TEXT NOT NULL,
     old_value TEXT,                         -- JSON snapshot before change

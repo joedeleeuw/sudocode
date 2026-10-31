@@ -38,7 +38,7 @@ sudocode is a lightweight agent orchestration system that lives in your repo. Ad
 
 ### How it works
 
-sudocode tracks human-specified requirements and objectives (what to do) as specs, and agent runtime context and plans (how to implement) as issues. These are trackable in git as a form of version-controlled memory for your agents. Specs/issues are both human and agent-editable. This allows agents to manage their own context and leave contextual breadcrumbs as they run for all agents to reference.
+sudocode tracks human-specified requirements and objectives (what to do) as specs, agent runtime context and plans (how to implement) as issues, and architecture decisions as ADRs. These are trackable in git as a form of version-controlled memory for your agents. Specs, issues, and ADRs are human and agent-editable. This allows agents to manage their own context and leave contextual breadcrumbs as they run for all agents to reference.
 
 Specs and issues form the backbone for advanced agent coordination and automation. Use specs to define high-level requirements and let agents carry out the implementation and manage their own issues.
 
@@ -159,6 +159,9 @@ A primitive for **agent intent** and context—work items derived from specs, ca
 - Graph relationship types: `blocks`, `related`, `parent-child`, `discovered-from`
 - Stored as Markdown + JSONL (`.sudocode/issues/`)
 
+### Architecture Decision Records (ADRs)
+ADRs capture architecture decisions beside specs and issues. Each ADR has a title and brief context, decision, and rationale, with optional considered options and consequences. Existing ADRs are accepted, an incoming ADR-to-ADR `supersedes` link marks the older ADR superseded, and withdrawn ADRs are archived. ADRs use `a-xxxx` IDs and live in `.sudocode/adrs/` with `.sudocode/adrs.jsonl` as their git-tracked snapshot.
+
 ### 3. Agent
 The **execution abstraction**—represents the actual trajectory of an agentic loop run against an issue.
 
@@ -175,10 +178,10 @@ A primitive representing **state changes** from agent execution.
 
 ## Key Features
 
-### Dual Issue/Spec Representation
-Every entity has both a **human-editable format** (Markdown + YAML) and a **machine-optimized format** (JSONL + SQLite):
+### Dual Entity Representation
+Every spec, issue, and ADR has both a **human-editable format** (Markdown + YAML) and a **machine-optimized format** (JSONL + SQLite):
 
-- Write specs and issues as readable Markdown
+- Write specs, issues, and ADRs as readable Markdown
 - Query and process through SQLite for performance
 - Auto-sync between formats (5-second debounce)
 - Git-friendly primary storage
@@ -261,7 +264,7 @@ If the editor doesn't open:
 
 ### Distributed Git Database
 
-- **Source of Truth**: JSONL files (`.sudocode/specs/specs.jsonl`, `.sudocode/issues/issues.jsonl`) committed to git
+- **Source of Truth**: JSONL files (`.sudocode/specs.jsonl`, `.sudocode/issues.jsonl`, `.sudocode/adrs.jsonl`) committed to git
 - **Local Cache**: Each machine maintains a SQLite cache (`.sudocode/cache.db`, gitignored)
 - **Auto-Export**: SQLite → JSONL after CRUD operations (5-second debounce)
 - **Auto-Import**: JSONL → SQLite when JSONL is newer (e.g., after `git pull`)

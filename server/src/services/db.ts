@@ -79,12 +79,12 @@ export function hasCliTables(db: Database.Database): boolean {
     SELECT COUNT(*) as count
     FROM sqlite_master
     WHERE type='table'
-    AND name IN ('specs', 'issues', 'relationships', 'tags')
+    AND name IN ('specs', 'issues', 'adrs', 'relationships', 'tags')
   `
     )
     .get() as { count: number };
 
-  return result.count === 4;
+  return result.count === 5;
 }
 
 /**

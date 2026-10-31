@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/card'
 import { EntityCombobox } from '@/components/ui/entity-combobox'
 import { useIssues } from '@/hooks/useIssues'
 import { useSpecs } from '@/hooks/useSpecs'
+import { useAdrs } from '@/hooks/useAdrs'
 
 interface RelationshipFormProps {
   fromId?: string
@@ -30,11 +31,12 @@ const RELATIONSHIP_TYPES: RelationshipType[] = [
   'implements',
   'references',
   'depends-on',
+  'supersedes',
 ]
 
 export function RelationshipForm({
   fromId,
-  fromType: _fromType,
+  fromType,
   onSubmit,
   onCancel,
   inline = false,
@@ -44,20 +46,34 @@ export function RelationshipForm({
   const [relationshipType, setRelationshipType] = useState<RelationshipType>('related')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Fetch all issues and specs for the dropdown
   const { issues, isLoading: isLoadingIssues } = useIssues(false)
   const { specs, isLoading: isLoadingSpecs } = useSpecs(false)
+  const { adrs, isLoading: isLoadingAdrs } = useAdrs(false)
 
-  // Filter out the current entity from the list
   const filteredIssues = issues.filter((issue) => issue.id !== fromId)
   const filteredSpecs = specs.filter((spec) => spec.id !== fromId)
+  const filteredAdrs = adrs.filter((adr) => adr.id !== fromId)
 
-  // Prepare entities for the combobox based on selected type
   const entities = toType === 'issue'
     ? filteredIssues.map((issue) => ({ id: issue.id, title: issue.title }))
-    : filteredSpecs.map((spec) => ({ id: spec.id, title: spec.title }))
+    : toType === 'adr'
+      ? filteredAdrs.map((adr) => ({ id: adr.id, title: adr.title }))
+      : filteredSpecs.map((spec) => ({ id: spec.id, title: spec.title }))
 
-  const isLoadingEntities = toType === 'issue' ? isLoadingIssues : isLoadingSpecs
+  const isLoadingEntities = toType === 'issue'
+    ? isLoadingIssues
+    : toType === 'adr'
+      ? isLoadingAdrs
+      : isLoadingSpecs
+  const availableRelationshipTypes = RELATIONSHIP_TYPES.filter(
+    (type) => type !== 'supersedes' || (fromType === 'adr' && toType === 'adr')
+  )
+  const handleEntityTypeChange = (type: EntityType) => {
+    setToType(type)
+    if (relationshipType === 'supersedes' && (fromType !== 'adr' || type !== 'adr')) {
+      setRelationshipType('related')
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -93,13 +109,15 @@ export function RelationshipForm({
         value={toId}
         onChange={setToId}
         entityType={toType}
-        onEntityTypeChange={setToType}
+        onEntityTypeChange={handleEntityTypeChange}
         disabled={isSubmitting || isLoadingEntities}
         placeholder={isLoadingEntities
           ? 'Loading...'
           : toType === 'issue'
             ? 'Search issues...'
-            : 'Search specs...'}
+            : toType === 'adr'
+              ? 'Search ADRs...'
+              : 'Search specs...'}
       />
 
       {/* Relationship Type */}
@@ -113,7 +131,7 @@ export function RelationshipForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {RELATIONSHIP_TYPES.map((type) => (
+            {availableRelationshipTypes.map((type) => (
               <SelectItem key={type} value={type}>
                 {RELATIONSHIP_LABELS[type]}
               </SelectItem>

@@ -12,8 +12,9 @@ import {
   dismissFeedback,
   type ListFeedbackOptions,
 } from '../operations/feedback.js';
-import { getSpec } from '../operations/specs.js';
 import { getIssue } from '../operations/issues.js';
+import { getEntity } from '../operations/entities.js';
+import { getEntityRow } from '@sudocode-ai/types/entities';
 import { createFeedbackAnchor, createAnchorByText } from '../operations/feedback-anchors.js';
 import { exportToJSONL } from '../export.js';
 import type { FeedbackType } from '../types.js';
@@ -39,7 +40,7 @@ export interface FeedbackAddOptions {
 }
 
 /**
- * Add feedback to a spec or issue
+ * Add feedback to a spec, issue, or ADR
  * Can be from an issue (issueId provided) or anonymous (no issueId)
  * Entity type is automatically inferred from the ID prefix
  */
@@ -72,23 +73,12 @@ export async function handleFeedbackAdd(
       }
     }
 
-    // Validate target exists and get content
-    let toContent: string;
-    if (toType === 'spec') {
-      const spec = getSpec(ctx.db, toId);
-      if (!spec) {
-        console.error(chalk.red(`✗ Spec not found: ${toId}`));
-        process.exit(1);
-      }
-      toContent = spec.content;
-    } else {
-      const toIssue = getIssue(ctx.db, toId);
-      if (!toIssue) {
-        console.error(chalk.red(`✗ Issue not found: ${toId}`));
-        process.exit(1);
-      }
-      toContent = toIssue.content;
+    const target = getEntity(ctx.db, toId, toType);
+    if (!target) {
+      console.error(chalk.red(`✗ ${getEntityRow(toType).label} not found: ${toId}`));
+      process.exit(1);
     }
+    const toContent = target.content;
 
     // Create anchor based on line number or text search (optional)
     let anchor;
@@ -394,24 +384,13 @@ export async function handleFeedbackRelocate(
       process.exit(1);
     }
 
-    // Get target content based on inferred type
     const toType = getEntityTypeFromId(feedback.to_id);
-    let toContent: string;
-    if (toType === 'spec') {
-      const spec = getSpec(ctx.db, feedback.to_id);
-      if (!spec) {
-        console.error(chalk.red(`✗ Spec not found: ${feedback.to_id}`));
-        process.exit(1);
-      }
-      toContent = spec.content;
-    } else {
-      const issue = getIssue(ctx.db, feedback.to_id);
-      if (!issue) {
-        console.error(chalk.red(`✗ Issue not found: ${feedback.to_id}`));
-        process.exit(1);
-      }
-      toContent = issue.content;
+    const target = getEntity(ctx.db, feedback.to_id, toType);
+    if (!target) {
+      console.error(chalk.red(`✗ ${getEntityRow(toType).label} not found: ${feedback.to_id}`));
+      process.exit(1);
     }
+    const toContent = target.content;
 
     const lineNumber = parseInt(options.line);
     if (isNaN(lineNumber) || lineNumber < 1) {

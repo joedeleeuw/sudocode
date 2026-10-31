@@ -3,6 +3,8 @@ import type {
   ApiResponse,
   Issue,
   Spec,
+  AdrWithState,
+  EntityType,
   Relationship,
   IssueFeedback,
   RepositoryInfo,
@@ -12,6 +14,8 @@ import type {
   UpdateIssueRequest,
   CreateSpecRequest,
   UpdateSpecRequest,
+  CreateAdrRequest,
+  UpdateAdrRequest,
   CreateRelationshipRequest,
   DeleteRelationshipRequest,
   CreateFeedbackRequest,
@@ -199,12 +203,24 @@ export const specsApi = {
   getFeedback: (id: string) => get<IssueFeedback[]>(`/feedback?to_id=${id}`),
 }
 
+export const adrsApi = {
+  getAll: (archived?: boolean) => {
+    const params = archived !== undefined ? `?archived=${archived}` : ''
+    return get<AdrWithState[]>(`/adrs${params}`)
+  },
+  getById: (id: string) => get<AdrWithState>(`/adrs/${id}`),
+  create: (data: CreateAdrRequest) => post<AdrWithState>('/adrs', data),
+  update: (id: string, data: UpdateAdrRequest) => put<AdrWithState>(`/adrs/${id}`, data),
+  delete: (id: string) => del(`/adrs/${id}`),
+  getFeedback: (id: string) => get<IssueFeedback[]>(`/feedback?to_id=${id}`),
+}
+
 /**
  * Relationships API
  */
 export const relationshipsApi = {
   list: () => get<Relationship[]>('/relationships'),
-  getForEntity: (entityId: string, entityType: 'issue' | 'spec') =>
+  getForEntity: (entityId: string, entityType: EntityType) =>
     get<Relationship[] | { outgoing: Relationship[]; incoming: Relationship[] }>(
       `/relationships/${entityType}/${entityId}`
     ),

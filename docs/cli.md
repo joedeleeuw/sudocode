@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `sudocode` CLI tool provides commands for managing technical specifications, issues, and their relationships. It follows a git-like command structure with subcommands for different entity types and operations.
+The `sudocode` CLI tool provides commands for managing technical specifications, issues, architecture decision records (ADRs), and their relationships. It follows a git-like command structure with subcommands for different entity types and operations.
 
 ## Command Structure
 
@@ -210,6 +210,26 @@ sudocode spec link spec-001 issue-010 --type implements
 ```bash
 sudocode spec unlink <from-id> <to-id>
 ```
+
+## ADR Commands
+
+```bash
+# Create an ADR with context, decision, and rationale
+sudocode adr create "Store decisions in sudocode" \
+  --description "Separate ADR folders fragment project context. Store ADRs beside specs and issues for one queryable history."
+
+sudocode adr list [--grep query] [--archived true|false] [--limit 50]
+sudocode adr show a-xxxx
+sudocode adr update a-xxxx --title "New title" --description "Revised rationale"
+sudocode adr update a-xxxx --tags architecture,storage
+sudocode adr archive a-xxxx
+
+# ADR2 supersedes ADR1; only ADR-to-ADR links allow this type
+sudocode link a-new a-old --type supersedes
+sudocode link a-old s-spec --type references
+```
+
+`adr show` derives `superseded` from incoming `supersedes` relationships and displays incoming and outgoing links. Archiving represents a withdrawn decision; no status field is stored.
 
 ## Issue Commands
 

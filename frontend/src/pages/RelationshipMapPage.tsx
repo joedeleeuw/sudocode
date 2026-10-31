@@ -19,11 +19,12 @@ import {
 import { cn } from '@/lib/utils'
 import { useIssues } from '@/hooks/useIssues'
 import { useSpecs } from '@/hooks/useSpecs'
+import { useAdrs } from '@/hooks/useAdrs'
 import { useProject } from '@/hooks/useProject'
 import { useProjectRoutes } from '@/hooks/useProjectRoutes'
 import { useTheme } from '@/contexts/ThemeContext'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
-import type { EntityType, Issue, RelationshipType, Spec, WebSocketMessage } from '@/types/api'
+import type { Adr, EntityType, Issue, RelationshipType, Spec, WebSocketMessage } from '@/types/api'
 import { readSpecBreadboard } from '@/lib/spec-breadboard'
 
 interface MapNode {
@@ -44,16 +45,20 @@ type TopologyLink = MapLink & { source: string; target: string }
 type MapNodeObject = NodeObject<MapNode>
 type MapLinkObject = LinkObject<MapNode, MapLink>
 
-type MapEntity = { type: 'issue'; entity: Issue } | { type: 'spec'; entity: Spec }
+type MapEntity =
+  | { type: 'issue'; entity: Issue }
+  | { type: 'spec'; entity: Spec }
+  | { type: 'adr'; entity: Adr }
 
-// Same hues as the `issue` / `spec` Badge variants
 const ENTITY_HEX_COLORS: Record<EntityType, string> = {
   issue: '#3b82f6',
   spec: '#a855f7',
+  adr: '#f59e0b',
 }
 const DIMMED_ENTITY_COLORS: Record<EntityType, string> = {
   issue: 'rgba(59, 130, 246, 0.15)',
   spec: 'rgba(168, 85, 247, 0.15)',
+  adr: 'rgba(245, 158, 11, 0.15)',
 }
 const DIMMED_LINK_COLOR = 'rgba(148, 163, 184, 0.12)'
 
@@ -73,6 +78,7 @@ export default function RelationshipMapPage() {
   const { activeTheme } = useTheme()
   const issuesQuery = useIssues()
   const specsQuery = useSpecs()
+  const adrsQuery = useAdrs()
   const { connected, subscribe, unsubscribe, addMessageHandler, removeMessageHandler } =
     useWebSocketContext()
 
@@ -133,8 +139,11 @@ export default function RelationshipMapPage() {
     for (const spec of specsQuery.specs) {
       map.set(`spec:${spec.id}`, { type: 'spec', entity: spec })
     }
+    for (const adr of adrsQuery.adrs) {
+      map.set(`adr:${adr.id}`, { type: 'adr', entity: adr })
+    }
     return map
-  }, [issuesQuery.issues, specsQuery.specs])
+  }, [issuesQuery.issues, specsQuery.specs, adrsQuery.adrs])
 
   // Only topology goes into the graph, so content edits (titles, statuses) do not
   // restart the force simulation; card and hover details are read from entitiesByNodeId.
@@ -443,13 +452,13 @@ export default function RelationshipMapPage() {
 
         <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-lg border bg-card/90 p-3 text-xs text-card-foreground shadow-sm">
           <ul className="space-y-1" aria-label="Legend">
-            {(['issue', 'spec'] as const).map((type) => (
+            {(['issue', 'spec', 'adr'] as const).map((type) => (
               <li key={type} className="flex items-center gap-2">
                 <span
                   className="inline-block h-2.5 w-2.5 rounded-full"
                   style={{ backgroundColor: ENTITY_HEX_COLORS[type] }}
                 />
-                {type === 'issue' ? 'Issue' : 'Spec'}
+                {type === 'issue' ? 'Issue' : type === 'adr' ? 'ADR' : 'Spec'}
               </li>
             ))}
             {(Object.keys(RELATIONSHIP_LABELS) as RelationshipType[]).map((type) => (
@@ -484,7 +493,7 @@ export default function RelationshipMapPage() {
           >
             <div className="flex items-start justify-between gap-2">
               <Badge variant={selectedEntity.type}>
-                {selectedEntity.type === 'issue' ? 'Issue' : 'Spec'} {selectedEntity.entity.id}
+                {selectedEntity.type === 'issue' ? 'Issue' : selectedEntity.type === 'adr' ? 'ADR' : 'Spec'} {selectedEntity.entity.id}
               </Badge>
               <Button
                 variant="ghost"
@@ -505,7 +514,9 @@ export default function RelationshipMapPage() {
                   {selectedEntity.entity.status.replace(/_/g, ' ')}
                 </Badge>
               )}
-              <Badge variant="outline">P{selectedEntity.entity.priority}</Badge>
+              {'priority' in selectedEntity.entity && (
+                <Badge variant="outline">P{selectedEntity.entity.priority}</Badge>
+              )}
               <span>
                 Updated{' '}
                 {formatDistanceToNow(
@@ -531,7 +542,9 @@ export default function RelationshipMapPage() {
                   to={
                     selectedEntity.type === 'issue'
                       ? paths.issue(selectedEntity.entity.id)
-                      : `${paths.spec(selectedEntity.entity.id)}${
+                      : selectedEntity.type === 'adr'
+                        ? paths.adr(selectedEntity.entity.id)
+                        : `${paths.spec(selectedEntity.entity.id)}${
                           selectedBreadboard?.status !== 'absent' ? '?view=breadboard' : ''
                         }`
                   }

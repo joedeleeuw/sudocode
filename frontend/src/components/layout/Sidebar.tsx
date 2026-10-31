@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   FileText,
+  BookOpen,
   ListTodo,
   X,
   Settings,
@@ -53,6 +54,12 @@ export default function Sidebar({ open, collapsed, onClose }: SidebarProps) {
       basePath: '/specs',
       label: 'Specs',
       icon: FileText,
+    },
+    {
+      path: paths.adrs(),
+      basePath: '/adrs',
+      label: 'ADRs',
+      icon: BookOpen,
     },
     {
       path: paths.workflows(),

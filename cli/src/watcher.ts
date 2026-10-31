@@ -17,6 +17,10 @@ import {
   deleteSpec,
 } from "./operations/specs.js";
 import { listIssues, getIssue, deleteIssue } from "./operations/issues.js";
+import { listAdrs, getAdr, getAdrByFilePath, deleteAdr } from "./operations/adrs.js";
+import { deleteEntity, getEntity } from "./operations/entities.js";
+import type { EntityType } from "@sudocode-ai/types";
+import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
 import { parseMarkdownFile } from "./markdown.js";
 import { listFeedback } from "./operations/feedback.js";
 import { getTags } from "./operations/tags.js";
@@ -42,7 +46,7 @@ const contentHashCache = new Map<string, string>();
 // Key: absolute file path, Value: { entityId, entityType }
 const filePathToEntityCache = new Map<
   string,
-  { entityId: string; entityType: "spec" | "issue" }
+  { entityId: string; entityType: EntityType }
 >();
 
 /**
@@ -51,7 +55,7 @@ const filePathToEntityCache = new Map<
 function updateFilePathCache(
   filePath: string,
   entityId: string,
-  entityType: "spec" | "issue"
+  entityType: EntityType
 ): void {
   filePathToEntityCache.set(filePath, { entityId, entityType });
 }
@@ -68,7 +72,7 @@ function removeFilePathFromCache(filePath: string): void {
  */
 function getEntityFromFilePathCache(
   filePath: string
-): { entityId: string; entityType: "spec" | "issue" } | undefined {
+): { entityId: string; entityType: EntityType } | undefined {
   return filePathToEntityCache.get(filePath);
 }
 
@@ -286,7 +290,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   function contentMatches(
     mdPath: string,
     entityId: string,
-    entityType: "spec" | "issue"
+    entityType: EntityType
   ): boolean {
     try {
       // Check if file exists
@@ -298,9 +302,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
       const parsed = parseMarkdownFile(mdPath, db, baseDir);
       const { data: frontmatter, content: mdContent } = parsed;
 
-      // Get entity from database
-      const dbEntity =
-        entityType === "spec" ? getSpec(db, entityId) : getIssue(db, entityId);
+      const dbEntity = getEntity(db, entityId, entityType);
 
       if (!dbEntity) {
         return false; // Entity not in DB, shouldn't happen
@@ -316,19 +318,14 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
         return false;
       }
 
-      // Compare other key fields
-      if (entityType === "spec") {
-        if (frontmatter.priority !== dbEntity.priority) {
-          return false;
-        }
-      } else {
-        const issue = dbEntity as any;
-        if (frontmatter.status !== issue.status) {
-          return false;
-        }
-        if (frontmatter.priority !== issue.priority) {
-          return false;
-        }
+      if ("priority" in dbEntity && frontmatter.priority !== dbEntity.priority) {
+        return false;
+      }
+      if ("status" in dbEntity && frontmatter.status !== dbEntity.status) {
+        return false;
+      }
+      if (frontmatter.archived !== undefined && frontmatter.archived !== dbEntity.archived) {
+        return false;
       }
 
       return true; // Content matches
@@ -359,13 +356,10 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
       for (const line of lines) {
         const jsonlEntity = JSON.parse(line);
         const entityId = jsonlEntity.id;
-        const entityType = jsonlPath.includes("specs.jsonl") ? "spec" : "issue";
-
-        // Get entity from database
-        const dbEntity =
-          entityType === "spec"
-            ? getSpec(db, entityId)
-            : getIssue(db, entityId);
+        const entityRow = ENTITY_ROWS.find((row) => jsonlPath.endsWith(row.jsonlFile));
+        if (!entityRow) throw new Error(`Unknown JSONL entity file: ${jsonlPath}`);
+        const entityType = entityRow.type;
+        const dbEntity = getEntity(db, entityId, entityType);
 
         // If entity doesn't exist in DB, import is needed
         if (!dbEntity) {
@@ -378,16 +372,15 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
           (jsonlEntity.content || "").trim() !== (dbEntity.content || "").trim()
         )
           return true;
-        if (jsonlEntity.priority !== dbEntity.priority) return true;
-        if (jsonlEntity.parent_id !== dbEntity.parent_id) return true;
+        if ("priority" in dbEntity && jsonlEntity.priority !== dbEntity.priority) return true;
+        if ("parent_id" in dbEntity && jsonlEntity.parent_id !== dbEntity.parent_id) return true;
         if (jsonlEntity.archived !== dbEntity.archived) return true;
         if (jsonlEntity.archived_at !== dbEntity.archived_at) return true;
 
-        if (entityType === "spec") {
-          const dbSpec = dbEntity as any;
-          // Compare spec-specific fields
-          if (jsonlEntity.file_path !== dbSpec.file_path) return true;
-        } else if (entityType === "issue") {
+        if ("file_path" in dbEntity && jsonlEntity.file_path !== dbEntity.file_path) {
+          return true;
+        }
+        if (entityType === "issue") {
           const dbIssue = dbEntity as any;
           if (jsonlEntity.status !== dbIssue.status) return true;
           if (jsonlEntity.assignee !== dbIssue.assignee) return true;
@@ -458,14 +451,16 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   }
 
   // Paths to watch
-  const specsDir = path.join(baseDir, "specs");
-  const issuesDir = path.join(baseDir, "issues");
-  const specsJSONL = path.join(baseDir, "specs.jsonl");
-  const issuesJSONL = path.join(baseDir, "issues.jsonl");
+  const specsDir = path.join(baseDir, getEntityRow("spec").markdownDir);
+  const issuesDir = path.join(baseDir, getEntityRow("issue").markdownDir);
+  const adrsDir = path.join(baseDir, getEntityRow("adr").markdownDir);
+  const specsJSONL = path.join(baseDir, getEntityRow("spec").jsonlFile);
+  const issuesJSONL = path.join(baseDir, getEntityRow("issue").jsonlFile);
+  const adrsJSONL = path.join(baseDir, getEntityRow("adr").jsonlFile);
 
   // Watch directories and JSONL files - chokidar will recursively watch all files inside
   const watcher = chokidar.watch(
-    [specsDir, issuesDir, specsJSONL, issuesJSONL],
+    [specsDir, issuesDir, adrsDir, specsJSONL, issuesJSONL, adrsJSONL],
     {
       persistent: true,
       ignoreInitial,
@@ -478,7 +473,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
   // Log watch patterns for debugging
   onLog(
-    `[watch] Watching directories: ${specsDir}, ${issuesDir} and JSONL files`
+    `[watch] Watching directories: ${specsDir}, ${issuesDir}, ${adrsDir} and JSONL files`
   );
 
   /**
@@ -515,11 +510,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
             if (cachedEntity) {
               const { entityId, entityType } = cachedEntity;
               try {
-                if (entityType === "spec") {
-                  deleteSpec(db, entityId);
-                } else {
-                  deleteIssue(db, entityId);
-                }
+                deleteEntity(db, entityId, entityType);
                 onLog(
                   `[watch] Deleted ${entityType} ${entityId} (markdown file removed, markdown is source of truth)`
                 );
@@ -534,14 +525,18 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
                 );
               }
             } else {
-              // Try to find entity by file path in DB (for specs)
-              const entityType = relPath.startsWith("specs/") ? "spec" : "issue";
-              if (entityType === "spec") {
-                const spec = getSpecByFilePath(db, relPath);
-                if (spec) {
-                  deleteSpec(db, spec.id);
+              const entityRow = ENTITY_ROWS.find((row) =>
+                relPath.startsWith(`${row.markdownDir}/`)
+              );
+              if (!entityRow) throw new Error(`Unknown markdown entity path: ${relPath}`);
+              if (entityRow.type !== "issue") {
+                const document = entityRow.type === "spec"
+                  ? getSpecByFilePath(db, relPath)
+                  : getAdrByFilePath(db, relPath);
+                if (document) {
+                  deleteEntity(db, document.id, entityRow.type);
                   onLog(
-                    `[watch] Deleted spec ${spec.id} (markdown file removed, markdown is source of truth)`
+                    `[watch] Deleted ${entityRow.type} ${document.id} (markdown file removed, markdown is source of truth)`
                   );
                   await exportToJSONL(db, { outputDir: baseDir });
                 }
@@ -563,27 +558,22 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
           // Parse markdown to determine entity and sync direction
           // DB/JSONL is source of truth for entity existence - only sync content updates
           let entityId: string | undefined;
-          let entityType: "spec" | "issue" = "spec";
           let syncDirection: "markdown-to-db" | "db-to-markdown" | "skip" | "orphaned" = "skip";
 
-          // Determine entity type based on file location
           const relPath = path.relative(baseDir, filePath);
-          entityType =
-            relPath.startsWith("specs/") || relPath.startsWith("specs\\")
-              ? "spec"
-              : "issue";
+          const entityRow = ENTITY_ROWS.find(
+            (row) =>
+              relPath.startsWith(`${row.markdownDir}/`) ||
+              relPath.startsWith(`${row.markdownDir}\\`)
+          );
+          if (!entityRow) throw new Error(`Unknown markdown entity path: ${relPath}`);
+          const entityType = entityRow.type;
 
           try {
             const parsed = parseMarkdownFile(filePath, db, baseDir);
             const { data: frontmatter } = parsed;
             entityId = frontmatter.id;
-
-            // Check if entity exists in DB
-            const dbEntity = entityId
-              ? entityType === "spec"
-                ? getSpec(db, entityId)
-                : getIssue(db, entityId)
-              : null;
+            const dbEntity = entityId ? getEntity(db, entityId, entityType) : null;
 
             if (!entityId || !dbEntity) {
               // No entity ID in frontmatter or entity doesn't exist in DB = orphaned file
@@ -660,10 +650,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
                   // Emit event
                   if (onEntitySync) {
-                    const entity =
-                      entityType === "spec"
-                        ? getSpec(db, result.entityId)
-                        : getIssue(db, result.entityId);
+                    const entity = getEntity(db, result.entityId, entityType);
 
                     await onEntitySync({
                       entityType,
@@ -731,10 +718,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
               // Emit event
               if (onEntitySync) {
-                const entity =
-                  entityType === "spec"
-                    ? getSpec(db, entityId)
-                    : getIssue(db, entityId);
+                const entity = getEntity(db, entityId, entityType);
 
                 await onEntitySync({
                   entityType,
@@ -771,10 +755,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
             // Emit typed callback event for markdown sync
             if (onEntitySync) {
               // Get full entity data to include in event
-              const entity =
-                result.entityType === "spec"
-                  ? getSpec(db, result.entityId)
-                  : getIssue(db, result.entityId);
+              const entity = getEntity(db, result.entityId, result.entityType);
 
               await onEntitySync({
                 entityType: result.entityType,
@@ -793,12 +774,14 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
             stats.errors++;
           }
         }
-      } else if (basename === "specs.jsonl" || basename === "issues.jsonl") {
+      } else if (ENTITY_ROWS.some((row) => row.jsonlFile === basename)) {
         // JSONL file changed (e.g., from CLI update or git pull)
         onLog(`[watch] ${event} ${path.relative(baseDir, filePath)}`);
 
         if (event !== "unlink") {
-          const entityType = basename === "specs.jsonl" ? "spec" : "issue";
+          const entityRow = ENTITY_ROWS.find((row) => row.jsonlFile === basename);
+          if (!entityRow) throw new Error(`Unknown JSONL entity file: ${filePath}`);
+          const entityType = entityRow.type;
 
           // Read JSONL file
           const jsonlContent = fs.readFileSync(filePath, "utf8");
@@ -864,18 +847,12 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
               if (onEntitySync) {
                 // Get fresh entity data from database (after import)
-                const entity =
-                  entityType === "spec"
-                    ? getSpec(db, entityId)
-                    : getIssue(db, entityId);
+                const entity = getEntity(db, entityId, entityType);
 
                 // Find markdown file path
                 let entityFilePath: string;
-                const entityDir = path.join(
-                  baseDir,
-                  entityType === "spec" ? "specs" : "issues"
-                );
-                if (entityType === "spec" && entity && "file_path" in entity && entity.file_path) {
+                const entityDir = path.join(baseDir, entityRow.markdownDir);
+                if (entityType !== "issue" && entity && "file_path" in entity && entity.file_path) {
                   entityFilePath = path.join(baseDir, entity.file_path);
                 } else if (entity && "title" in entity && entity.title) {
                   // Use syncFileWithRename to find existing file or generate proper filename
@@ -912,32 +889,32 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
             let syncedCount = 0;
 
-            // Get all specs and sync to markdown
-            const specs = listSpecs(db);
-            for (const spec of specs) {
-              if (spec.file_path) {
-                const mdPath = path.join(baseDir, spec.file_path);
-
-                // Skip if content already matches (prevents oscillation)
-                if (contentMatches(mdPath, spec.id, "spec")) {
-                  continue;
-                }
-
+            const documents: Array<{
+              entityType: "spec" | "adr";
+              entities: Array<{ id: string; file_path: string }>;
+            }> = [
+              { entityType: "spec", entities: listSpecs(db) },
+              { entityType: "adr", entities: listAdrs(db) },
+            ];
+            for (const { entityType, entities } of documents) {
+              for (const document of entities) {
+                if (!document.file_path) continue;
+                const mdPath = path.join(baseDir, document.file_path);
+                if (contentMatches(mdPath, document.id, entityType)) continue;
                 const result = await syncJSONLToMarkdown(
                   db,
-                  spec.id,
-                  "spec",
+                  document.id,
+                  entityType,
                   mdPath
                 );
-
                 if (result.success) {
                   syncedCount++;
                   onLog(
-                    `[watch] Synced spec ${spec.id} to ${spec.file_path} (${result.action})`
+                    `[watch] Synced ${entityType} ${document.id} to ${document.file_path} (${result.action})`
                   );
                 } else if (result.error) {
                   onError(
-                    new Error(`Failed to sync spec ${spec.id}: ${result.error}`)
+                    new Error(`Failed to sync ${entityType} ${document.id}: ${result.error}`)
                   );
                 }
               }
@@ -945,7 +922,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
             // Get all issues and check if any need syncing
             const issues = listIssues(db);
-            const issuesDir = path.join(baseDir, "issues");
+            const issuesDir = path.join(baseDir, getEntityRow("issue").markdownDir);
             for (const issue of issues) {
               // Find existing file or generate new filename using unified scheme
               let mdPath = findExistingEntityFile(
@@ -1039,39 +1016,19 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
 
     // Initialize JSONL state cache on startup to avoid broadcasting all entities on first change
     try {
-      // Initialize specs.jsonl cache
-      const specsJsonlPath = path.join(baseDir, "specs.jsonl");
-      if (fs.existsSync(specsJsonlPath)) {
-        const content = fs.readFileSync(specsJsonlPath, "utf8");
+      for (const row of ENTITY_ROWS) {
+        const jsonlPath = path.join(baseDir, row.jsonlFile);
+        if (!fs.existsSync(jsonlPath)) continue;
+        const content = fs.readFileSync(jsonlPath, "utf8");
         const lines = content.trim().split("\n").filter((line) => line.trim());
         const stateMap = new Map<string, string>();
         for (const line of lines) {
           const entity = JSON.parse(line);
-          // Use canonical content hash to match the change detection logic
-          const contentHash = computeCanonicalHash(entity);
-          stateMap.set(entity.id, contentHash);
+          stateMap.set(entity.id, computeCanonicalHash(entity));
         }
-        jsonlStateCache.set(specsJsonlPath, stateMap);
+        jsonlStateCache.set(jsonlPath, stateMap);
         onLog(
-          `[watch] Initialized cache for specs.jsonl (${stateMap.size} entities)`
-        );
-      }
-
-      // Initialize issues.jsonl cache
-      const issuesJsonlPath = path.join(baseDir, "issues.jsonl");
-      if (fs.existsSync(issuesJsonlPath)) {
-        const content = fs.readFileSync(issuesJsonlPath, "utf8");
-        const lines = content.trim().split("\n").filter((line) => line.trim());
-        const stateMap = new Map<string, string>();
-        for (const line of lines) {
-          const entity = JSON.parse(line);
-          // Use canonical content hash to match the change detection logic
-          const contentHash = computeCanonicalHash(entity);
-          stateMap.set(entity.id, contentHash);
-        }
-        jsonlStateCache.set(issuesJsonlPath, stateMap);
-        onLog(
-          `[watch] Initialized cache for issues.jsonl (${stateMap.size} entities)`
+          `[watch] Initialized cache for ${row.jsonlFile} (${stateMap.size} entities)`
         );
       }
     } catch (error) {
@@ -1091,14 +1048,16 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
       let orphanedCount = 0;
       let createdCount = 0;
 
-      // Build set of valid entity IDs from database
-      const validSpecIds = new Set(listSpecs(db).map((s) => s.id));
-      const validIssueIds = new Set(listIssues(db).map((i) => i.id));
+      const validEntityIds = new Map<EntityType, Set<string>>([
+        ["spec", new Set(listSpecs(db).map((spec) => spec.id))],
+        ["issue", new Set(listIssues(db).map((issue) => issue.id))],
+        ["adr", new Set(listAdrs(db).map((adr) => adr.id))],
+      ]);
 
       // Helper function to handle orphaned file
       const handleOrphanedFile = async (
         filePath: string,
-        entityType: "spec" | "issue",
+        entityType: EntityType,
         relPath: string
       ): Promise<void> => {
         if (markdownFirst) {
@@ -1136,62 +1095,30 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
         }
       };
 
-      // Check specs directory
-      const specsPath = path.join(baseDir, "specs");
-      if (fs.existsSync(specsPath)) {
-        const specFiles = fs
-          .readdirSync(specsPath)
-          .filter((f) => f.endsWith(".md"));
-        for (const file of specFiles) {
-          const filePath = path.join(specsPath, file);
+      for (const row of ENTITY_ROWS) {
+        const entityDir = path.join(baseDir, row.markdownDir);
+        if (!fs.existsSync(entityDir)) continue;
+        const validIds = validEntityIds.get(row.type);
+        if (!validIds) throw new Error(`Missing entity ID set for ${row.type}`);
+        const files = fs.readdirSync(entityDir).filter((file) => file.endsWith(".md"));
+        for (const file of files) {
+          const filePath = path.join(entityDir, file);
+          const relPath = `${row.markdownDir}/${file}`;
           try {
             const parsed = parseMarkdownFile(filePath, db, baseDir);
             const entityId = parsed.data.id;
-            if (!entityId || !validSpecIds.has(entityId)) {
-              await handleOrphanedFile(filePath, "spec", `specs/${file}`);
+            if (!entityId || !validIds.has(entityId)) {
+              await handleOrphanedFile(filePath, row.type, relPath);
             } else {
-              // File has valid entity - update cache
-              updateFilePathCache(filePath, entityId, "spec");
+              updateFilePathCache(filePath, entityId, row.type);
             }
           } catch {
-            // If parsing fails, treat as orphaned
             if (markdownFirst) {
-              // Try to create entity even from invalid file (autoInitialize will handle it)
-              await handleOrphanedFile(filePath, "spec", `specs/${file}`);
+              await handleOrphanedFile(filePath, row.type, relPath);
             } else {
               fs.unlinkSync(filePath);
               orphanedCount++;
-              onLog(`[watch] Deleted orphaned spec file (invalid): specs/${file}`);
-            }
-          }
-        }
-      }
-
-      // Check issues directory
-      const issuesPath = path.join(baseDir, "issues");
-      if (fs.existsSync(issuesPath)) {
-        const issueFiles = fs
-          .readdirSync(issuesPath)
-          .filter((f) => f.endsWith(".md"));
-        for (const file of issueFiles) {
-          const filePath = path.join(issuesPath, file);
-          try {
-            const parsed = parseMarkdownFile(filePath, db, baseDir);
-            const entityId = parsed.data.id;
-            if (!entityId || !validIssueIds.has(entityId)) {
-              await handleOrphanedFile(filePath, "issue", `issues/${file}`);
-            } else {
-              // File has valid entity - update cache
-              updateFilePathCache(filePath, entityId, "issue");
-            }
-          } catch {
-            // If parsing fails, treat as orphaned
-            if (markdownFirst) {
-              await handleOrphanedFile(filePath, "issue", `issues/${file}`);
-            } else {
-              fs.unlinkSync(filePath);
-              orphanedCount++;
-              onLog(`[watch] Deleted orphaned issue file (invalid): issues/${file}`);
+              onLog(`[watch] Deleted orphaned ${row.type} file (invalid): ${relPath}`);
             }
           }
         }

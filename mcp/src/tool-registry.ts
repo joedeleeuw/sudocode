@@ -6,6 +6,9 @@
  */
 
 import type { Scope } from "./scopes.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
+
+const adrToolStem = getEntityRow("adr").toolStem;
 
 // =============================================================================
 // Types
@@ -227,6 +230,49 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: `list_${adrToolStem}s`,
+    scope: "default",
+    description: "Search and browse architecture decision records, including derived supersession state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Maximum results. Defaults to 50." },
+        search: { type: "string", description: "Search ADR titles and content." },
+        archived: { type: "boolean", description: "Include archived ADRs. Defaults to false." },
+      },
+    },
+  },
+  {
+    name: `show_${adrToolStem}`,
+    scope: "default",
+    description: "Get an ADR with its content, relationships, feedback, and derived supersession state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        adr_id: { type: "string", description: "ADR ID with format a-xxxx." },
+      },
+      required: ["adr_id"],
+    },
+  },
+  {
+    name: `upsert_${adrToolStem}`,
+    scope: "default",
+    description: "Create or update an architecture decision record. Supersede decisions with link type=supersedes; archive withdrawn decisions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        adr_id: { type: "string", description: "ADR ID. Omit to create." },
+        title: { type: "string", description: "Decision title. Required when creating." },
+        description: {
+          type: "string",
+          description: "Context, decision, rationale, and optional considered options and consequences in Markdown.",
+        },
+        tags: { type: "array", items: { type: "string" } },
+        archived: { type: "boolean", description: "Archive a withdrawn decision." },
+      },
+    },
+  },
+  {
     name: "link",
     scope: "default",
     description:
@@ -251,6 +297,7 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
             "depends-on",
             "discovered-from",
             "related",
+            "supersedes",
           ],
           description: "Relationship type.",
         },
@@ -287,6 +334,7 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
             "depends-on",
             "discovered-from",
             "related",
+            "supersedes",
           ],
           description: "Optional relationship type.",
         },
@@ -322,7 +370,7 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
         },
         to_id: {
           type: "string",
-          description: "Target ID receiving the feedback (spec or issue).",
+          description: "Target ID receiving the feedback (spec, issue, or ADR).",
         },
         content: {
           type: "string",

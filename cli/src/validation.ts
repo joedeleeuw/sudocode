@@ -19,6 +19,7 @@ const VALID_RELATIONSHIP_TYPES = new Set<RelationshipType>([
   "implements",
   "references",
   "depends-on",
+  "supersedes",
 ]);
 
 export function isValidRelationshipType(type: string): type is RelationshipType {
@@ -27,6 +28,21 @@ export function isValidRelationshipType(type: string): type is RelationshipType 
 
 export function getValidRelationshipTypes(): string[] {
   return Array.from(VALID_RELATIONSHIP_TYPES);
+}
+
+export function parseRelationshipType(value: unknown): RelationshipType {
+  if (typeof value !== "string") {
+    throw new Error(`Relationship type must be a string; received ${typeof value}`);
+  }
+  const relationshipType = Array.from(VALID_RELATIONSHIP_TYPES).find(
+    (candidate) => candidate === value
+  );
+  if (!relationshipType) {
+    throw new Error(
+      `Invalid relationship type: ${value}. Valid types: ${getValidRelationshipTypes().join(", ")}`
+    );
+  }
+  return relationshipType;
 }
 
 /**

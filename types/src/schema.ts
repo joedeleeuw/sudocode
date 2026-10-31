@@ -47,6 +47,21 @@ CREATE TABLE IF NOT EXISTS specs (
 );
 `;
 
+export const ADRS_TABLE = `
+CREATE TABLE IF NOT EXISTS adrs (
+    id TEXT PRIMARY KEY,
+    uuid TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL CHECK(length(title) <= 500),
+    file_path TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1)),
+    archived_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    external_links TEXT
+);
+`;
+
 export const ISSUES_TABLE = `
 CREATE TABLE IF NOT EXISTS issues (
     id TEXT PRIMARY KEY,
@@ -412,9 +427,17 @@ GROUP BY i.id;
 /**
  * Combined schema initialization
  */
+export const ADRS_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_adrs_uuid ON adrs(uuid);
+CREATE INDEX IF NOT EXISTS idx_adrs_archived ON adrs(archived);
+CREATE INDEX IF NOT EXISTS idx_adrs_created_at ON adrs(created_at);
+CREATE INDEX IF NOT EXISTS idx_adrs_updated_at ON adrs(updated_at);
+`;
+
 export const ALL_TABLES = [
   SPECS_TABLE,
   ISSUES_TABLE,
+  ADRS_TABLE,
   RELATIONSHIPS_TABLE,
   TAGS_TABLE,
   EVENTS_TABLE,
@@ -429,6 +452,7 @@ export const ALL_TABLES = [
 export const ALL_INDEXES = [
   SPECS_INDEXES,
   ISSUES_INDEXES,
+  ADRS_INDEXES,
   RELATIONSHIPS_INDEXES,
   TAGS_INDEXES,
   EVENTS_INDEXES,

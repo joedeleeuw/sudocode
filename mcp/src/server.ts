@@ -15,6 +15,7 @@ import {
 import { SudocodeClient } from "./client.js";
 import * as issueTools from "./tools/issues.js";
 import * as specTools from "./tools/specs.js";
+import * as adrTools from "./tools/adrs.js";
 import * as relationshipTools from "./tools/relationships.js";
 import * as feedbackTools from "./tools/feedback.js";
 import * as referenceTools from "./tools/references.js";
@@ -34,6 +35,7 @@ import {
   getToolByName,
   getHandlerType,
 } from "./tool-registry.js";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 export class SudocodeMCPServer {
   private server: Server;
@@ -224,7 +226,7 @@ export class SudocodeMCPServer {
                 mimeType: "text/markdown",
                 text: `# sudocode Quickstart
 
-sudocode is a git-native spec and issue management system designed for AI-assisted development.
+sudocode is a git-native spec, issue, and ADR management system designed for AI-assisted development.
 
 ## Core Concepts
 
@@ -238,6 +240,11 @@ sudocode is a git-native spec and issue management system designed for AI-assist
 - Status: open → in_progress → blocked → closed
 - Can reference and implement specs
 - Each issue has a unique hash-based ID (e.g., i-x7k9)
+
+**ADRs**: Architecture decisions stored beside specs and issues
+- Existing decisions are accepted; incoming supersedes links derive superseded state
+- Withdrawn decisions are archived
+- Each ADR has a unique hash-based ID (e.g., a-p4m8)
 
 **Feedback**: Issues can provide anchored feedback on specs
 - Anchors track specific lines/sections in spec markdown
@@ -260,6 +267,7 @@ sudocode is a git-native spec and issue management system designed for AI-assist
 - \`depends-on\`: General dependency
 - \`discovered-from\`: New work found during implementation
 - \`related\`: General relationship
+- \`supersedes\`: ADR-to-ADR replacement; invalid for other entity pairs
 `,
               },
             ],
@@ -293,6 +301,12 @@ sudocode is a git-native spec and issue management system designed for AI-assist
         return specTools.showSpec(this.client, args as any);
       case "upsert_spec":
         return specTools.upsertSpec(this.client, args as any);
+      case "list_adrs":
+        return adrTools.listAdrs(this.client, adrTools.decodeListAdrsParams(args));
+      case "show_adr":
+        return adrTools.showAdr(this.client, adrTools.decodeShowAdrParams(args));
+      case "upsert_adr":
+        return adrTools.upsertAdr(this.client, adrTools.decodeUpsertAdrParams(args));
       case "link":
         return relationshipTools.link(this.client, args as any);
       case "add_reference":
@@ -383,8 +397,9 @@ sudocode is a git-native spec and issue management system designed for AI-assist
     const workingDir = this.client["workingDir"] || process.cwd();
     const sudocodeDir = join(workingDir, ".sudocode");
     const cacheDbPath = join(sudocodeDir, "cache.db");
-    const issuesPath = join(sudocodeDir, "issues.jsonl");
-    const specsPath = join(sudocodeDir, "specs.jsonl");
+    const hasTrackedEntities = ENTITY_ROWS.some((row) =>
+      existsSync(join(sudocodeDir, row.jsonlFile))
+    );
 
     // Check if .sudocode directory exists
     if (!existsSync(sudocodeDir)) {
@@ -398,7 +413,7 @@ sudocode is a git-native spec and issue management system designed for AI-assist
     // .sudocode exists, check for cache.db
     if (!existsSync(cacheDbPath)) {
       // Try to auto-import from JSONL files if they exist
-      if (existsSync(issuesPath) || existsSync(specsPath)) {
+      if (hasTrackedEntities) {
         try {
           console.error(
             "Found .sudocode directory but no cache.db, running import..."
@@ -422,7 +437,7 @@ sudocode is a git-native spec and issue management system designed for AI-assist
       } else {
         try {
           console.error(
-            "Found .sudocode directory but no issues.jsonl or specs.jsonl, running init..."
+            "Found .sudocode directory but no tracked entity JSONL, running init..."
           );
           await this.client.exec(["init"]);
           console.error("✓ Successfully initialized sudocode");

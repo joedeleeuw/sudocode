@@ -5,10 +5,10 @@
 import matter from "gray-matter";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
-import { getSpec } from "./operations/specs.js";
-import { getIssue } from "./operations/issues.js";
+import { findEntity } from "./operations/entities.js";
+import { getEntityTypeFromId } from "./id-generator.js";
 import { createFeedbackAnchor } from "./operations/feedback-anchors.js";
-import type { LocationAnchor } from "@sudocode-ai/types";
+import type { EntityType, LocationAnchor } from "@sudocode-ai/types";
 
 export interface ParsedMarkdown<T extends object = Record<string, any>> {
   /**
@@ -39,9 +39,9 @@ export interface CrossReference {
    */
   id: string;
   /**
-   * Entity type (spec or issue)
+   * Entity type (spec, issue, or ADR)
    */
-  type: "spec" | "issue";
+  type: EntityType;
   /**
    * Position in content
    */
@@ -154,7 +154,7 @@ export function extractCrossReferences(
   // - [[i-x7k9]]{ blocks }
   // - [[i-x7k9]]{ type: depends-on }
   const refPattern =
-    /\[\[(@)?([is]-[0-9a-z]{4,8})(?:\|([^\]]+))?\]\](?:\{\s*(?:type:\s*)?([a-z-]+)\s*\})?/gi;
+    /\[\[(@)?([isa]-[0-9a-z]{4,8})(?:\|([^\]]+))?\]\](?:\{\s*(?:type:\s*)?([a-z-]+)\s*\})?/gi;
 
   let match: RegExpExecArray | null;
 
@@ -179,44 +179,14 @@ export function extractCrossReferences(
       anchor = undefined;
     }
 
-    if (db) {
-      let entityType: "spec" | "issue" | null = null;
-      try {
-        const spec = getSpec(db, id);
-        if (spec) {
-          entityType = "spec";
-        }
-      } catch (error) {}
-
-      if (!entityType) {
-        try {
-          const issue = getIssue(db, id);
-          if (issue) {
-            entityType = "issue";
-          }
-        } catch (error) {}
-      }
-
-      if (entityType) {
-        references.push({
-          match: match[0],
-          id,
-          type: entityType,
-          index: match.index,
-          displayText,
-          relationshipType,
-          anchor,
-        });
-      }
-    } else {
-      // Determine type from hash-based ID prefix
-      // Hash IDs always use i- for issues, s- for specs
-      const type: "spec" | "issue" = id.startsWith("i-") ? "issue" : "spec";
-
+    const entityType = db
+      ? findEntity(db, id)?.entityType
+      : getEntityTypeFromId(id);
+    if (entityType) {
       references.push({
         match: match[0],
         id,
-        type,
+        type: entityType,
         index: match.index,
         displayText,
         relationshipType,

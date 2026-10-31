@@ -1,6 +1,6 @@
 # Data Model Specification
 
-This document defines the core data schemas for Specs and Issues in the sudocode system. Agent, Artifact, and Execution entities will be defined incrementally as the design evolves.
+This document defines the core data schemas for Specs, Issues, and Architecture Decision Records (ADRs) in the sudocode system. Agent, Artifact, and Execution entities will be defined incrementally as the design evolves.
 
 ## Design Principles
 
@@ -128,7 +128,17 @@ tags: [string]                # Free-form tags for organization
 
 ---
 
-### 2. Issue
+### 2. Architecture Decision Record (ADR)
+
+**Purpose**: Captures a durable architecture decision without introducing a separate documentation hierarchy.
+
+ADRs use `a-xxxx` IDs and are stored in the `adrs` SQLite table, `.sudocode/adrs.jsonl`, and `.sudocode/adrs/{name}.md`. Their fields are `id`, `uuid`, `title`, `file_path`, `content`, `archived`, `archived_at`, `created_at`, `updated_at`, and optional `external_links`. ADRs do not have priority, parent, or status fields.
+
+A typical ADR contains 1-3 sentences each of context, decision, and rationale. `Considered Options` and `Consequences` sections are optional. An existing ADR is accepted. `superseded` is derived from an incoming ADR-to-ADR `supersedes` relationship and is not stored. A withdrawn ADR is archived. ADRs can use `references` and `related` links to specs and issues, and `[[a-xxxx]]` mentions resolve like other entity mentions.
+
+---
+
+### 3. Issue
 
 **Purpose**: Captures actionable work items derived from specs, assigned to agents or humans.
 

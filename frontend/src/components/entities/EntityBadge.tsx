@@ -8,13 +8,14 @@ import { useIssueHoverData } from '@/hooks/useIssueHoverData'
 import { useSpecHoverData } from '@/hooks/useSpecHoverData'
 import { IssueHoverContent } from './IssueHoverContent'
 import { SpecHoverContent } from './SpecHoverContent'
-import { issuesApi, specsApi, getCurrentProjectId } from '@/lib/api'
+import { adrsApi, issuesApi, specsApi, getCurrentProjectId } from '@/lib/api'
+import type { EntityType } from '@/types/api'
 import { useProject } from '@/hooks/useProject'
 import { cn } from '@/lib/utils'
 
 export interface EntityBadgeProps {
   entityId: string
-  entityType: 'issue' | 'spec'
+  entityType: EntityType
   displayText?: string | null
   showHoverCard?: boolean
   linkToEntity?: boolean
@@ -32,7 +33,7 @@ function truncateTitle(title: string, maxLength: number = MAX_TITLE_LENGTH): str
 
 function useEntityTitle(
   entityId: string,
-  entityType: 'issue' | 'spec',
+  entityType: EntityType,
   enabled: boolean
 ): { title: string | undefined; isLoading: boolean } {
   const { currentProjectId } = useProject()
@@ -45,10 +46,13 @@ function useEntityTitle(
       if (entityType === 'issue') {
         const issue = await issuesApi.getById(entityId)
         return issue.title
-      } else {
-        const spec = await specsApi.getById(entityId)
-        return spec.title
       }
+      if (entityType === 'adr') {
+        const adr = await adrsApi.getById(entityId)
+        return adr.title
+      }
+      const spec = await specsApi.getById(entityId)
+      return spec.title
     },
     enabled: enabled && !!entityId && !!currentProjectId && isProjectSynced,
     staleTime: 30000,
@@ -111,9 +115,8 @@ export function EntityBadge({
   const { title, isLoading: isTitleLoading } = useEntityTitle(entityId, entityType, showTitle)
 
   const getEntityUrl = () => {
-    if (entityType === 'issue') {
-      return `/issues/${entityId}`
-    }
+    if (entityType === 'issue') return `/issues/${entityId}`
+    if (entityType === 'adr') return `/adrs/${entityId}`
     return `/specs/${entityId}`
   }
 
@@ -125,7 +128,9 @@ export function EntityBadge({
   }
 
   const getVariant = () => {
-    return entityType === 'issue' ? 'issue' : 'spec'
+    if (entityType === 'issue') return 'issue'
+    if (entityType === 'adr') return 'adr'
+    return 'spec'
   }
 
   // Determine display content based on props
@@ -159,7 +164,7 @@ export function EntityBadge({
   )
 
   // Optionally wrap with hover card
-  const content = showHoverCard ? (
+  const content = showHoverCard && entityType !== 'adr' ? (
     entityType === 'issue' ? (
       <IssueHoverCard issueId={entityId}>{wrappedBadge}</IssueHoverCard>
     ) : (

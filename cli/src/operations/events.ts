@@ -4,6 +4,8 @@
 
 import type Database from 'better-sqlite3';
 import type { Event, EntityType, EventType } from '../types.js';
+import { getEntityRow } from '@sudocode-ai/types/entities';
+import { getEntityIdentity } from './entities.js';
 
 export interface CreateEventInput {
   entity_id: string;
@@ -33,18 +35,25 @@ export function insertEvent(
   db: Database.Database,
   input: CreateEventInput
 ): Event {
+  const entity = getEntityIdentity(db, input.entity_id, input.entity_type);
+  if (!entity) {
+    throw new Error(
+      `${getEntityRow(input.entity_type).label} not found: ${input.entity_id}`
+    );
+  }
   const stmt = db.prepare(`
     INSERT INTO events (
-      entity_id, entity_type, event_type, actor,
+      entity_id, entity_uuid, entity_type, event_type, actor,
       old_value, new_value, comment, git_commit_sha, source
     ) VALUES (
-      @entity_id, @entity_type, @event_type, @actor,
+      @entity_id, @entity_uuid, @entity_type, @event_type, @actor,
       @old_value, @new_value, @comment, @git_commit_sha, @source
     )
   `);
 
   const result = stmt.run({
     entity_id: input.entity_id,
+    entity_uuid: entity.uuid,
     entity_type: input.entity_type,
     event_type: input.event_type,
     actor: input.actor,

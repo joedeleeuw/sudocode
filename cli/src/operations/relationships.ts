@@ -5,7 +5,16 @@
 import type Database from "better-sqlite3";
 import type { Relationship, EntityType, RelationshipType } from "../types.js";
 import { isValidRelationshipType, getValidRelationshipTypes } from "../validation.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 import { getIssue } from "./issues.js";
+import { getEntityIdentity } from "./entities.js";
+
+export class InvalidRelationshipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidRelationshipError";
+  }
+}
 
 export interface CreateRelationshipInput {
   from_id: string;
@@ -30,26 +39,25 @@ export function addRelationship(
     );
   }
 
-  // Check if from_id exists and get from_uuid
-  const fromTable = input.from_type === "spec" ? "specs" : "issues";
-  const fromEntity = db
-    .prepare(`SELECT id, uuid FROM ${fromTable} WHERE id = ?`)
-    .get(input.from_id) as { id: string; uuid: string } | undefined;
-  if (!fromEntity) {
-    throw new Error(
-      `${input.from_type === "spec" ? "Spec" : "Issue"} not found: ${input.from_id}`
+  if (
+    input.relationship_type === "supersedes" &&
+    (input.from_type !== "adr" || input.to_type !== "adr")
+  ) {
+    throw new InvalidRelationshipError(
+      `supersedes requires an ADR source and target; received ${input.from_type} -> ${input.to_type}`
     );
   }
 
-  // Check if to_id exists and get to_uuid
-  const toTable = input.to_type === "spec" ? "specs" : "issues";
-  const toEntity = db
-    .prepare(`SELECT id, uuid FROM ${toTable} WHERE id = ?`)
-    .get(input.to_id) as { id: string; uuid: string } | undefined;
+  const fromRow = getEntityRow(input.from_type);
+  const fromEntity = getEntityIdentity(db, input.from_id, input.from_type);
+  if (!fromEntity) {
+    throw new Error(`${fromRow.label} not found: ${input.from_id}`);
+  }
+
+  const toRow = getEntityRow(input.to_type);
+  const toEntity = getEntityIdentity(db, input.to_id, input.to_type);
   if (!toEntity) {
-    throw new Error(
-      `${input.to_type === "spec" ? "Spec" : "Issue"} not found: ${input.to_id}`
-    );
+    throw new Error(`${toRow.label} not found: ${input.to_id}`);
   }
 
   // Check if relationship already exists

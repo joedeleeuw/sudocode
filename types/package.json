@@ -29,6 +29,10 @@
       "types": "./src/voice.d.ts",
       "default": "./src/voice.d.ts"
     },
+    "./entities": {
+      "types": "./dist/entities.d.ts",
+      "default": "./dist/entities.js"
+    },
     "./schema": {
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"

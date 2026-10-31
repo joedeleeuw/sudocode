@@ -9,6 +9,7 @@ import { initDatabase } from "../db.js";
 import type Database from "better-sqlite3";
 import { PROJECT_CONFIG_FILE, LOCAL_CONFIG_FILE, getProjectConfig } from "../config.js";
 import type { StorageMode } from "@sudocode-ai/types";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 /**
  * Build .gitignore content based on sourceOfTruth mode.
@@ -27,10 +28,8 @@ export function buildGitignore(sourceOfTruth: StorageMode): string {
   ];
 
   if (sourceOfTruth === "jsonl") {
-    // Markdown dirs are derived from JSONL — gitignore them
-    lines.splice(1, 0, "issues/", "specs/");
+    lines.splice(1, 0, ...ENTITY_ROWS.map((row) => `${row.markdownDir}/`));
   }
-  // In markdown mode, specs/ and issues/ are the source of truth — track them
 
   return lines.join("\n");
 }
@@ -44,18 +43,15 @@ export interface InitOptions {
  * Check if sudocode is initialized in a directory
  */
 export function isInitialized(dir: string): boolean {
-  // Check for either project config OR local config (for backwards compatibility)
   const projectConfigPath = path.join(dir, PROJECT_CONFIG_FILE);
   const localConfigPath = path.join(dir, LOCAL_CONFIG_FILE);
   const dbPath = path.join(dir, "cache.db");
-  const specsDir = path.join(dir, "specs");
-  const issuesDir = path.join(dir, "issues");
-
   return (
     (fs.existsSync(projectConfigPath) || fs.existsSync(localConfigPath)) &&
     fs.existsSync(dbPath) &&
-    fs.existsSync(specsDir) &&
-    fs.existsSync(issuesDir)
+    ENTITY_ROWS.every((row) =>
+      fs.existsSync(path.join(dir, row.markdownDir))
+    )
   );
 }
 
@@ -70,8 +66,9 @@ export async function performInitialization(
 
   // Create directory structure
   fs.mkdirSync(dir, { recursive: true });
-  fs.mkdirSync(path.join(dir, "specs"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "issues"), { recursive: true });
+  for (const row of ENTITY_ROWS) {
+    fs.mkdirSync(path.join(dir, row.markdownDir), { recursive: true });
+  }
 
   // Track what was preserved
   const preserved: string[] = [];
@@ -129,28 +126,19 @@ export async function performInitialization(
     );
   }
 
-  let hasSpecsData = false;
-  let hasIssuesData = false;
-  // Create empty JSONL files only if they don't exist
-  const specsPath = path.join(dir, "specs.jsonl");
-  if (fs.existsSync(specsPath)) {
-    preserved.push("specs.jsonl");
-    const content = fs.readFileSync(specsPath, "utf8");
-    hasSpecsData = content.trim().length > 0;
-  } else {
-    fs.writeFileSync(specsPath, "", "utf8");
+  let hasJsonlData = false;
+  for (const row of ENTITY_ROWS) {
+    const jsonlPath = path.join(dir, row.jsonlFile);
+    if (fs.existsSync(jsonlPath)) {
+      preserved.push(row.jsonlFile);
+      const content = fs.readFileSync(jsonlPath, "utf8");
+      if (content.trim().length > 0) hasJsonlData = true;
+    } else {
+      fs.writeFileSync(jsonlPath, "", "utf8");
+    }
   }
 
-  const issuesPath = path.join(dir, "issues.jsonl");
-  if (fs.existsSync(issuesPath)) {
-    preserved.push("issues.jsonl");
-    const content = fs.readFileSync(issuesPath, "utf8");
-    hasIssuesData = content.trim().length > 0;
-  } else {
-    fs.writeFileSync(issuesPath, "", "utf8");
-  }
-
-  if (hasSpecsData || hasIssuesData) {
+  if (hasJsonlData) {
     try {
       if (!jsonOutput) {
         console.log(chalk.blue("Importing from existing JSONL files..."));
@@ -174,6 +162,13 @@ export async function performInitialization(
           console.log(
             chalk.gray(
               `  Issues: ${result.issues.added} added, ${result.issues.updated} updated`
+            )
+          );
+        }
+        if (result.adrs.added > 0 || result.adrs.updated > 0) {
+          console.log(
+            chalk.gray(
+              `  ADRs: ${result.adrs.added} added, ${result.adrs.updated} updated`
             )
           );
         }

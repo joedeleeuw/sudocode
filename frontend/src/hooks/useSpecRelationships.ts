@@ -3,13 +3,16 @@ import { useEffect, useCallback } from 'react'
 import { relationshipsApi, getCurrentProjectId } from '@/lib/api'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import { useProject } from '@/hooks/useProject'
-import type { Relationship, WebSocketMessage } from '@/types/api'
+import type { EntityType, Relationship, WebSocketMessage } from '@/types/api'
 
 /**
  * Hook to fetch relationships for a spec with WebSocket real-time updates
  * Similar to useIssueRelationships but for a single spec entity
  */
-export function useSpecRelationships(specId: string | undefined) {
+export function useSpecRelationships(
+  specId: string | undefined,
+  entityType: EntityType = 'spec'
+) {
   const queryClient = useQueryClient()
   const { currentProjectId } = useProject()
   const { connected, subscribe, unsubscribe, addMessageHandler, removeMessageHandler } = useWebSocketContext()
@@ -19,14 +22,14 @@ export function useSpecRelationships(specId: string | undefined) {
   const isProjectSynced = currentProjectId === apiProjectId
 
   // Include projectId in query key to ensure proper cache separation between projects
-  const queryKey = ['spec-relationships', currentProjectId, specId]
+  const queryKey = ['spec-relationships', currentProjectId, entityType, specId]
 
   const query = useQuery({
     queryKey,
     queryFn: async () => {
       if (!specId) return []
 
-      const data = await relationshipsApi.getForEntity(specId, 'spec')
+      const data = await relationshipsApi.getForEntity(specId, entityType)
       // Handle both array and grouped object responses
       let relationshipsArray: Relationship[] = []
       if (Array.isArray(data)) {
@@ -49,14 +52,14 @@ export function useSpecRelationships(specId: string | undefined) {
       if (data && specId) {
         // Invalidate if the relationship involves this spec
         if (data.from_id === specId || data.to_id === specId) {
-          queryClient.invalidateQueries({ queryKey: ['spec-relationships', currentProjectId, specId] })
+          queryClient.invalidateQueries({ queryKey: ['spec-relationships', currentProjectId, entityType, specId] })
         }
       } else {
         // If we can't determine, invalidate all spec relationships for this project
         queryClient.invalidateQueries({ queryKey: ['spec-relationships', currentProjectId] })
       }
     }
-  }, [queryClient, currentProjectId, specId])
+  }, [queryClient, currentProjectId, entityType, specId])
 
   // Subscribe to all relationship updates when connected
   useEffect(() => {

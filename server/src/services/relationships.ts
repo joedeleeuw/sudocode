@@ -1,6 +1,6 @@
 /**
  * Service layer for Relationships API
- * Wraps CLI operations for managing relationships between specs and issues
+ * Wraps CLI operations for managing relationships between specs, issues, and ADRs
  */
 
 import type Database from "better-sqlite3";

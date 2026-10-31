@@ -7,6 +7,7 @@
 // Re-export core types from the main package
 export type {
   Spec,
+  Adr,
   Issue,
   Relationship,
   EntityType,
@@ -20,6 +21,7 @@ export type {
   FeedbackAnchor,
   FeedbackType,
   SpecJSONL,
+  AdrJSONL,
   IssueJSONL,
   FeedbackJSONL,
   RelationshipJSONL,

@@ -8,11 +8,11 @@
  */
 
 import * as fs from "fs";
-import type { IssueJSONL, SpecJSONL } from "./types.js";
+import type { IssueJSONL, AdrJSONL, SpecJSONL } from "./types.js";
 import { toYaml, fromYaml } from "./yaml-converter.js";
 import { mergeYamlContent } from "./git-merge.js";
 
-export type JSONLEntity = IssueJSONL | SpecJSONL | Record<string, any>;
+export type JSONLEntity = IssueJSONL | AdrJSONL | SpecJSONL | Record<string, any>;
 
 /**
  * Conflict section from parsing git conflict markers

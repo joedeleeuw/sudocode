@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { SyncIndicator } from '@/components/issues/SyncIndicator'
 import { toast } from 'sonner'
-import type { Spec } from '@/types/api'
+import type { Adr, Spec } from '@/types/api'
 import type { Workflow } from '@/types/workflow'
 import { cn } from '@/lib/utils'
 
@@ -29,8 +29,8 @@ const priorityLabels: Record<number, string> = {
 }
 
 interface SpecCardProps {
-  spec: Spec
-  onClick?: (spec: Spec) => void
+  spec: Spec | Adr
+  onClick?: (spec: Spec | Adr) => void
   /** Active workflow for this spec (if any) */
   activeWorkflow?: Workflow
 }
@@ -143,7 +143,7 @@ export function SpecCard({
               {spec.external_links && spec.external_links.length > 0 && (
                 <SyncIndicator externalLinks={spec.external_links} variant="spec" />
               )}
-              {spec.priority !== undefined && spec.priority <= 3 && (
+              {'priority' in spec && spec.priority !== undefined && spec.priority <= 3 && (
                 <span
                   className={`shrink-0 rounded-full px-2 py-0.5 text-xs text-white ${priorityColors[spec.priority]}`}
                 >

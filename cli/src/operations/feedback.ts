@@ -6,6 +6,8 @@ import * as crypto from "crypto";
 import type Database from "better-sqlite3";
 import type { IssueFeedback, FeedbackType, FeedbackAnchor } from "../types.js";
 import { getEntityTypeFromId } from "../id-generator.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
+import { getEntityIdentity } from "./entities.js";
 
 export interface CreateFeedbackInput {
   id?: string;
@@ -76,23 +78,13 @@ export function createFeedback(
     fromUuid = fromIssue.uuid;
   }
 
-  // Get to_uuid based on inferred entity type
   const toType = getEntityTypeFromId(input.to_id);
-  let toUuid: string;
-
-  if (toType === "spec") {
-    const spec = db.prepare(`SELECT uuid FROM specs WHERE id = ?`).get(input.to_id) as { uuid: string } | undefined;
-    if (!spec) {
-      throw new Error(`Spec not found: ${input.to_id}`);
-    }
-    toUuid = spec.uuid;
-  } else {
-    const issue = db.prepare(`SELECT uuid FROM issues WHERE id = ?`).get(input.to_id) as { uuid: string } | undefined;
-    if (!issue) {
-      throw new Error(`Issue not found: ${input.to_id}`);
-    }
-    toUuid = issue.uuid;
+  const toRow = getEntityRow(toType);
+  const toEntity = getEntityIdentity(db, input.to_id, toType);
+  if (!toEntity) {
+    throw new Error(`${toRow.label} not found: ${input.to_id}`);
   }
+  const toUuid = toEntity.uuid;
 
   // Always include timestamps to ensure ISO 8601 format with timezone info
   // SQLite's CURRENT_TIMESTAMP returns local format without timezone, causing parsing issues
@@ -290,7 +282,7 @@ export function getFeedbackFromIssue(
 }
 
 /**
- * Get all feedback FOR a specific target (spec or issue receiving feedback)
+ * Get all feedback FOR a specific target (spec, issue, or ADR receiving feedback)
  */
 export function getFeedbackForTarget(
   db: Database.Database,

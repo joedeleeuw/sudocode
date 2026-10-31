@@ -9,6 +9,7 @@ import {
   type WatcherStats,
 } from "@sudocode-ai/cli/dist/watcher.js";
 import type { EntitySyncEvent } from "@sudocode-ai/types/events";
+import type { EntityType } from "@sudocode-ai/types";
 
 export interface ServerWatcherOptions {
   /**
@@ -31,9 +32,9 @@ export interface ServerWatcherOptions {
     filePath: string;
     baseDir: string;
     event: "add" | "change" | "unlink";
-    entityType?: "spec" | "issue";
+    entityType?: EntityType;
     entityId?: string;
-    entity?: any;
+    entity?: EntitySyncEvent["entity"];
     timestamp: Date;
   }) => void;
 }

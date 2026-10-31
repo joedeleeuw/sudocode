@@ -10,6 +10,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import { createIssuesRouter } from "./routes/issues.js";
 import { createSpecsRouter } from "./routes/specs.js";
+import { createAdrsRouter } from "./routes/adrs.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 import { createRelationshipsRouter } from "./routes/relationships.js";
 import { createFeedbackRouter } from "./routes/feedback.js";
 import { createExecutionsRouter } from "./routes/executions.js";
@@ -131,6 +133,11 @@ async function main() {
   // Entity routes (require project context via X-Project-ID header)
   app.use("/api/issues", requireProject(projectManager), createIssuesRouter());
   app.use("/api/specs", requireProject(projectManager), createSpecsRouter());
+  app.use(
+    `/api/${getEntityRow("adr").route}`,
+    requireProject(projectManager),
+    createAdrsRouter()
+  );
   app.use(
     "/api/relationships",
     requireProject(projectManager),

@@ -62,7 +62,8 @@ In the /.sudocode directory, we support the following structures:
 
 1. Specs in /.sudocode/specs: This directory contains a list in the format of a standard file structure. The spec files have machine-generated YAML frontmatter with fields such as the id, title, relationships, and create/update metadata. This is also synced to a corresponding JSONL file that contains a structured json snapshot that contains the current state of the spec.
 2. Issues in /.sudocode/issues: This directory contains a list of issues in a JSONL file (/.sudocode/issues/issues.jsonl). Issues are generally agent-generated and agent-managed. However, users can also make edits to issues in a human-readable expanded form, similar to specs. The issues are also flat-listed as markdown files, with frontmatter corresponding to their id, title, relationships, assignees, and create/update metadata. Updates to issue markdown files are synced to the JSONL file.
-3. Agent configs in ./sudocode/agents: This contains configurations for different agent types. For example, for Claude Code agents, this might include definitions for specific agent behaviors, such as plugins, hooks, prompts, or MCP servers. Users can declaratively update their intented agent behavior. This agent directory also supports other coding agents like Codex, Gemini CLI, etc.
+3. ADRs in /.sudocode/adrs and /.sudocode/adrs.jsonl: Architecture Decision Records live beside specs and issues. An ADR contains a title, brief context, the decision and why, with optional considered options and consequences. Existing ADRs are accepted unless superseded by an incoming ADR-to-ADR `supersedes` relationship; withdrawn ADRs are archived.
+4. Agent configs in ./sudocode/agents: This contains configurations for different agent types. For example, for Claude Code agents, this might include definitions for specific agent behaviors, such as plugins, hooks, prompts, or MCP servers. Users can declaratively update their intented agent behavior. This agent directory also supports other coding agents like Codex, Gemini CLI, etc.
 
 TODO: Expand to support environment configurations (worktrees, credentials, etc)
 
@@ -73,7 +74,7 @@ We can expand this to support sudocode-specific configs to modify behavior.
 The repository is used as the source of truth, and a db is synced and derived from the repo data as a cache for access and queryability.
 
 Each machine has a local SQLite cache (.sudocode/cache.db) - gitignored
-Source of truth is JSONL (.sudocode/issues/issues.jsonl, .sudocode/specs/specs.jsonl, etc) - committed to git
+Source of truth is JSONL (.sudocode/issues.jsonl, .sudocode/specs.jsonl, .sudocode/adrs.jsonl) - committed to git
 Auto-export syncs SQLite → JSONL after CRUD operations (5-second debounce)
 Auto-import syncs JSONL → SQLite when JSONL is newer (e.g., after git pull)
 Git handles distribution while AI handles merge conflicts.

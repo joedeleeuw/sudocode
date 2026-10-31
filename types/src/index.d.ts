@@ -31,7 +31,7 @@ export type ConflictResolution =
 export type IntegrationProviderName = string;
 
 /**
- * Represents a link between a sudocode entity (Spec/Issue) and an external system
+ * Represents a link between a sudocode entity (Spec/Issue/ADR) and an external system
  */
 export interface ExternalLink {
   /** The integration provider this link belongs to (plugin name) */
@@ -78,6 +78,19 @@ export interface Spec {
   external_links?: ExternalLink[];
 }
 
+export interface Adr {
+  id: string;
+  title: string;
+  uuid: string;
+  file_path: string;
+  content: string;
+  archived?: boolean;
+  archived_at?: string;
+  created_at: string;
+  updated_at: string;
+  external_links?: ExternalLink[];
+}
+
 export interface Issue {
   id: string;
   title: string;
@@ -115,7 +128,7 @@ export interface Relationship {
   metadata?: string;
 }
 
-export type EntityType = "spec" | "issue";
+export type EntityType = "spec" | "issue" | "adr";
 
 export type RelationshipType =
   | "blocks"
@@ -123,7 +136,8 @@ export type RelationshipType =
   | "discovered-from"
   | "implements"
   | "references"
-  | "depends-on";
+  | "depends-on"
+  | "supersedes";
 
 export interface Tag {
   entity_id: string;
@@ -212,6 +226,11 @@ export type FeedbackType = "comment" | "suggestion" | "request";
  * JSONL format types
  */
 export interface SpecJSONL extends Spec {
+  relationships: RelationshipJSONL[];
+  tags: string[];
+}
+
+export interface AdrJSONL extends Adr {
   relationships: RelationshipJSONL[];
   tags: string[];
 }

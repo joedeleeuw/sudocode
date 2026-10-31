@@ -8,8 +8,8 @@ import type Database from "better-sqlite3";
 import { addRelationship } from "../operations/relationships.js";
 import { exportToJSONL } from "../export.js";
 import { syncJSONLToMarkdown } from "../sync.js";
-import { getSpec } from "../operations/specs.js";
-import { getIssue } from "../operations/issues.js";
+import { findEntity } from "../operations/entities.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 import { syncFileWithRename } from "../filename-generator.js";
 import {
   isValidRelationshipType,
@@ -44,56 +44,37 @@ export async function handleLink(
       process.exit(1);
     }
 
-    // Determine entity types by checking existence
-    let fromType: "spec" | "issue";
-    let toType: "spec" | "issue";
-
-    // Determine 'from' entity type
-    if (getSpec(ctx.db, from)) {
-      fromType = "spec";
-    } else if (getIssue(ctx.db, from)) {
-      fromType = "issue";
-    } else {
+    const source = findEntity(ctx.db, from);
+    const target = findEntity(ctx.db, to);
+    if (!source) {
       console.error(chalk.red(`✗ Entity not found: ${from}`));
       process.exit(1);
     }
-
-    // Determine 'to' entity type
-    if (getSpec(ctx.db, to)) {
-      toType = "spec";
-    } else if (getIssue(ctx.db, to)) {
-      toType = "issue";
-    } else {
+    if (!target) {
       console.error(chalk.red(`✗ Entity not found: ${to}`));
       process.exit(1);
     }
 
     addRelationship(ctx.db, {
       from_id: from,
-      from_type: fromType,
+      from_type: source.entityType,
       to_id: to,
-      to_type: toType,
+      to_type: target.entityType,
       relationship_type: options.type,
     });
 
     // Export to JSONL to persist the relationship
     await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
 
-    // Sync the "from" entity back to markdown so the relationship appears in frontmatter
-    if (fromType === "spec") {
-      const spec = getSpec(ctx.db, from);
-      if (spec) {
-        const specPath = path.join(ctx.outputDir, spec.file_path);
-        await syncJSONLToMarkdown(ctx.db, from, "spec", specPath);
-      }
-    } else {
-      const issue = getIssue(ctx.db, from);
-      if (issue) {
-        const issuesDir = path.join(ctx.outputDir, "issues");
-        const issuePath = syncFileWithRename(from, issuesDir, issue.title);
-        await syncJSONLToMarkdown(ctx.db, from, "issue", issuePath);
-      }
-    }
+    const sourceRow = getEntityRow(source.entityType);
+    const sourcePath = "file_path" in source.entity
+      ? path.join(ctx.outputDir, source.entity.file_path)
+      : syncFileWithRename(
+          from,
+          path.join(ctx.outputDir, sourceRow.markdownDir),
+          source.entity.title
+        );
+    await syncJSONLToMarkdown(ctx.db, from, source.entityType, sourcePath);
 
     if (ctx.jsonOutput) {
       console.log(

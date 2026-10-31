@@ -3,14 +3,14 @@
  * These events are emitted by the CLI watcher and consumed by the server
  */
 
-import type { Spec, Issue } from "./index.js";
+import type { Spec, Issue, Adr, EntityType } from "./index.js";
 
 /**
  * Event fired when an entity is synced between database and markdown
  */
 export interface EntitySyncEvent {
   /** Type of entity that was synced */
-  entityType: "spec" | "issue";
+  entityType: EntityType;
 
   /** ID of the entity (e.g., 'i-x7k9', 's-14sh') */
   entityId: string;
@@ -31,7 +31,7 @@ export interface EntitySyncEvent {
   timestamp: Date;
 
   /** Optional: Full entity data (avoids DB query in server) */
-  entity?: Spec | Issue;
+  entity?: Spec | Issue | Adr;
 
   /** Optional: Duration of sync operation in milliseconds */
   duration?: number;
@@ -57,7 +57,7 @@ export interface FileChangeEvent {
   event: "add" | "change" | "unlink";
 
   /** Detected entity type (if applicable) */
-  entityType?: "spec" | "issue";
+  entityType?: EntityType;
 
   /** Detected entity ID (if applicable) */
   entityId?: string;

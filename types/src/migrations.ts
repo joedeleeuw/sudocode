@@ -3,6 +3,7 @@
  */
 
 import type Database from "better-sqlite3";
+import { ADRS_TABLE, ADRS_INDEXES } from "./schema.js";
 
 export interface Migration {
   version: number;
@@ -619,6 +620,17 @@ const MIGRATIONS: Migration[] = [
       console.log(
         "  Note: Anonymous feedback (without from_id) was removed during rollback"
       );
+    },
+  },
+  {
+    version: 6,
+    name: "add-adrs-table",
+    up: (db: Database.Database) => {
+      db.exec(ADRS_TABLE);
+      db.exec(ADRS_INDEXES);
+    },
+    down: (db: Database.Database) => {
+      db.exec("DROP TABLE IF EXISTS adrs;");
     },
   },
 ];

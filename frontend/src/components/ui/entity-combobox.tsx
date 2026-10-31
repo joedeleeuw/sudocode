@@ -77,6 +77,7 @@ export function EntityCombobox({
           <SelectContent>
             <SelectItem value="issue">Issue</SelectItem>
             <SelectItem value="spec">Spec</SelectItem>
+            <SelectItem value="adr">ADR</SelectItem>
           </SelectContent>
         </Select>
         <Popover open={open} onOpenChange={setOpen}>
@@ -95,7 +96,7 @@ export function EntityCombobox({
                 </span>
               ) : (
                 <span className="text-muted-foreground">
-                  {placeholder || (entityType === 'issue' ? 'Select issue...' : 'Select spec...')}
+                  {placeholder || (entityType === 'issue' ? 'Select issue...' : entityType === 'adr' ? 'Select ADR...' : 'Select spec...')}
                 </span>
               )}
               <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -105,7 +106,7 @@ export function EntityCombobox({
             <div className="flex flex-col">
               <div className="border-b p-2">
                 <Input
-                  placeholder={`Search ${entityType === 'issue' ? 'issues' : 'specs'}...`}
+                  placeholder={`Search ${entityType === 'issue' ? 'issues' : entityType === 'adr' ? 'ADRs' : 'specs'}...`}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="h-8"
@@ -115,7 +116,7 @@ export function EntityCombobox({
               <div className="max-h-60 overflow-auto">
                 {filteredEntities.length === 0 ? (
                   <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                    No {entityType === 'issue' ? 'issues' : 'specs'} found
+                    No {entityType === 'issue' ? 'issues' : entityType === 'adr' ? 'ADRs' : 'specs'} found
                   </div>
                 ) : (
                   filteredEntities.map((entity) => (

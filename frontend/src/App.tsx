@@ -14,6 +14,8 @@ import IssuesPage from '@/pages/IssuesPage'
 import IssueDetailPage from '@/pages/IssueDetailPage'
 import SpecsPage from '@/pages/SpecsPage'
 import SpecDetailPage from '@/pages/SpecDetailPage'
+import AdrsPage from '@/pages/AdrsPage'
+import AdrDetailPage from '@/pages/AdrDetailPage'
 import ArchivedIssuesPage from '@/pages/ArchivedIssuesPage'
 import ArchivedSpecsPage from '@/pages/ArchivedSpecsPage'
 import ExecutionDetailPage from '@/pages/ExecutionDetailPage'
@@ -106,6 +108,22 @@ function App() {
                         }
                       />
                       <Route
+                        path="adrs"
+                        element={
+                          <ProtectedRoute>
+                            <AdrsPage />
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="adrs/:id"
+                        element={
+                          <ProtectedRoute>
+                            <AdrDetailPage />
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
                         path="worktrees"
                         element={
                           <ProtectedRoute>
@@ -162,6 +180,8 @@ function App() {
                     <Route path="issues" element={<LegacyRedirect />} />
                     <Route path="specs/*" element={<LegacyRedirect />} />
                     <Route path="specs" element={<LegacyRedirect />} />
+                    <Route path="adrs/*" element={<LegacyRedirect />} />
+                    <Route path="adrs" element={<LegacyRedirect />} />
                     <Route path="executions/*" element={<LegacyRedirect />} />
                     <Route path="executions" element={<LegacyRedirect />} />
                     <Route path="workflows/*" element={<LegacyRedirect />} />

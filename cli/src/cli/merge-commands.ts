@@ -17,6 +17,8 @@ import {
 import { readJSONL, writeJSONL, type JSONLEntity } from "../jsonl.js";
 import { importFromJSONL } from "../import.js";
 import { readGitStage } from "../git-merge.js";
+import type { EntityType } from "@sudocode-ai/types";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 export interface CommandContext {
   db: Database.Database;
@@ -56,7 +58,7 @@ interface ResolveFileResult {
       action: string;
     }>;
   };
-  entityType: "issue" | "spec";
+  entityType: EntityType;
 }
 
 /**
@@ -66,16 +68,14 @@ export async function handleResolveConflicts(
   ctx: CommandContext,
   options: ResolveConflictsOptions
 ): Promise<void> {
-  const issuesPath = path.join(ctx.outputDir, "issues.jsonl");
-  const specsPath = path.join(ctx.outputDir, "specs.jsonl");
+  const conflictedFiles = ENTITY_ROWS.map((row) => ({
+    row,
+    filePath: path.join(ctx.outputDir, row.jsonlFile),
+  })).filter(
+    ({ filePath }) => fs.existsSync(filePath) && hasGitConflictMarkers(filePath)
+  );
 
-  // Check for conflicts
-  const issuesHasConflict =
-    fs.existsSync(issuesPath) && hasGitConflictMarkers(issuesPath);
-  const specsHasConflict =
-    fs.existsSync(specsPath) && hasGitConflictMarkers(specsPath);
-
-  if (!issuesHasConflict && !specsHasConflict) {
+  if (conflictedFiles.length === 0) {
     if (!ctx.jsonOutput) {
       console.log(chalk.green("✓ No merge conflicts found in JSONL files"));
     } else {
@@ -85,23 +85,12 @@ export async function handleResolveConflicts(
   }
 
   const results: Array<{ file: string } & ResolveFileResult> = [];
-
-  // Resolve issues.jsonl
-  if (issuesHasConflict) {
+  for (const { row, filePath } of conflictedFiles) {
     if (!ctx.jsonOutput && !options.dryRun) {
-      console.log(chalk.blue("Resolving conflicts in issues.jsonl..."));
+      console.log(chalk.blue(`Resolving conflicts in ${row.jsonlFile}...`));
     }
-    const result = await resolveFile(issuesPath, "issue", options);
-    results.push({ file: "issues.jsonl", ...result });
-  }
-
-  // Resolve specs.jsonl
-  if (specsHasConflict) {
-    if (!ctx.jsonOutput && !options.dryRun) {
-      console.log(chalk.blue("Resolving conflicts in specs.jsonl..."));
-    }
-    const result = await resolveFile(specsPath, "spec", options);
-    results.push({ file: "specs.jsonl", ...result });
+    const result = await resolveFile(filePath, row.type, options);
+    results.push({ file: row.jsonlFile, ...result });
   }
 
   // Re-import to database if not dry-run
@@ -145,7 +134,7 @@ export async function handleResolveConflicts(
  */
 async function resolveFile(
   filePath: string,
-  entityType: "issue" | "spec",
+  entityType: EntityType,
   options: ResolveConflictsOptions
 ): Promise<ResolveFileResult> {
   // Try to read from git index stages (base, ours, theirs)

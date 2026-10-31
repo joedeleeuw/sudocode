@@ -10,6 +10,7 @@ export const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
   implements: 'Implements',
   references: 'References',
   'depends-on': 'Depends on',
+  supersedes: 'Supersedes',
 }
 
 /**
@@ -22,6 +23,7 @@ export const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
   implements: 'bg-green-600 dark:bg-green-700',
   references: 'bg-gray-600 dark:bg-gray-700',
   'depends-on': 'bg-orange-600 dark:bg-orange-700',
+  supersedes: 'bg-amber-600 dark:bg-amber-700',
 }
 
 /**
@@ -34,6 +36,7 @@ export const RELATIONSHIP_HEX_COLORS: Record<RelationshipType, string> = {
   implements: '#16a34a',
   references: '#4b5563',
   'depends-on': '#ea580c',
+  supersedes: '#d97706',
 }
 
 /**
@@ -47,6 +50,7 @@ export function getInverseLabel(type: RelationshipType): string {
     implements: 'Implemented by',
     references: 'Referenced by',
     'depends-on': 'Required by',
+    supersedes: 'Superseded by',
   }
   return inverseLabels[type]
 }

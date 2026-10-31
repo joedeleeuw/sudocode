@@ -1,13 +1,14 @@
 # Sudocode MCP Server Specification
 
-The Sudocode MCP will be a local MCP server that exposes Sudocode CLI functionality to AI agents via the Model Context Protocol, enabling agentic management of specs, issues, and the feedback system.
+The Sudocode MCP is a local MCP server that exposes Sudocode CLI functionality to AI agents via the Model Context Protocol, enabling agentic management of specs, issues, ADRs, and the feedback system.
 
 ## Overview
 
 Sudocode MCP provides tools for:
 - **Spec Management**: Creating and managing specifications with markdown support
 - **Issue Management**: Full CRUD operations for bugs, features, tasks, epics, and chores
-- **Relationship Management**: Creating links between specs and issues (blocks, implements, etc.)
+- **ADR Management**: `list_adrs`, `show_adr`, and `upsert_adr` for architecture decision records
+- **Relationship Management**: Creating links between specs, issues, and ADRs (blocks, implements, references, related, and ADR-only supersedes)
 - **Feedback System**: Anchored feedback from issues to specs with smart relocation
 - **Analytics**: Ready work, blocked items, and project statistics
 

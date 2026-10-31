@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import * as http from "http";
 import { randomUUID } from "crypto";
+import type { EntityType } from "@sudocode-ai/types";
 import {
   getTTSSidecarManager,
   SidecarAudioResponse,
@@ -27,7 +28,7 @@ interface Client {
 interface ClientMessage {
   type: "subscribe" | "unsubscribe" | "ping" | "tts_request";
   project_id?: string; // Project ID for project-scoped subscriptions
-  entity_type?: "issue" | "spec" | "execution" | "workflow" | "all";
+  entity_type?: "issue" | "spec" | "adr" | "execution" | "workflow" | "all";
   entity_id?: string;
   // TTS request fields (when type is "tts_request")
   request_id?: string;
@@ -47,6 +48,9 @@ export interface ServerMessage {
     | "spec_created"
     | "spec_updated"
     | "spec_deleted"
+    | "adr_created"
+    | "adr_updated"
+    | "adr_deleted"
     | "feedback_created"
     | "feedback_updated"
     | "feedback_deleted"
@@ -249,7 +253,7 @@ class WebSocketManager {
    */
   hasSubscribers(
     projectId: string,
-    entityType: "issue" | "spec" | "execution" | "workflow",
+    entityType: EntityType | "execution" | "workflow",
     entityId: string
   ): boolean {
     const subscription = `${projectId}:${entityType}:${entityId}`;
@@ -579,7 +583,7 @@ class WebSocketManager {
    */
   broadcast(
     projectId: string,
-    entityType: "issue" | "spec" | "execution" | "workflow",
+    entityType: EntityType | "execution" | "workflow",
     entityId: string,
     message: ServerMessage
   ): void {
@@ -837,6 +841,18 @@ export function broadcastSpecUpdate(
 ): void {
   websocketManager.broadcast(projectId, "spec", specId, {
     type: `spec_${action}` as any,
+    data,
+  });
+}
+
+export function broadcastAdrUpdate(
+  projectId: string,
+  adrId: string,
+  action: "created" | "updated" | "deleted",
+  data?: any
+): void {
+  websocketManager.broadcast(projectId, "adr", adrId, {
+    type: `adr_${action}`,
     data,
   });
 }

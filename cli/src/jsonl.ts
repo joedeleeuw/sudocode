@@ -1,14 +1,14 @@
 /**
  * JSONL (JSON Lines) reader and writer
- * Supports reading and writing .jsonl files for specs and issues
+ * Supports reading and writing .jsonl files for specs, issues, and ADRs
  */
 
 import * as fs from "fs";
 import * as readline from "readline";
 import * as path from "path";
-import type { SpecJSONL, IssueJSONL } from "./types.js";
+import type { SpecJSONL, AdrJSONL, IssueJSONL } from "./types.js";
 
-export type JSONLEntity = SpecJSONL | IssueJSONL | Record<string, any>;
+export type JSONLEntity = SpecJSONL | AdrJSONL | IssueJSONL | Record<string, any>;
 
 export interface ReadJSONLOptions {
   /**

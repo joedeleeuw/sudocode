@@ -5,14 +5,19 @@
 import type Database from "better-sqlite3";
 import type {
   Spec,
+  Adr,
   Issue,
   SpecJSONL,
+  AdrJSONL,
   IssueJSONL,
+  EntityType,
   RelationshipJSONL,
   FeedbackJSONL,
   ExternalLink,
 } from "./types.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 import { listSpecs } from "./operations/specs.js";
+import { listAdrs } from "./operations/adrs.js";
 import { listIssues } from "./operations/issues.js";
 import { getOutgoingRelationships } from "./operations/relationships.js";
 import { getTags } from "./operations/tags.js";
@@ -33,6 +38,7 @@ export interface ExportOptions {
    */
   specsFile?: string;
   issuesFile?: string;
+  adrsFile?: string;
 }
 
 /**
@@ -74,67 +80,62 @@ function sortExternalLinks(links: ExternalLink[] | undefined): ExternalLink[] | 
   });
 }
 
-/**
- * Convert a Spec to SpecJSONL format with embedded relationships and tags
- * @param existingExternalLinks - Optional map of spec ID to external links (preserved from existing JSONL)
- */
+interface EntityJSONLMetadata {
+  relationships: RelationshipJSONL[];
+  tags: string[];
+  external_links?: ExternalLink[];
+}
+
+function entityJSONLMetadata(
+  db: Database.Database,
+  entity: Spec | Issue | Adr,
+  entityType: EntityType,
+  existingExternalLinks?: Map<string, ExternalLink[]>
+): EntityJSONLMetadata {
+  const relationships = getOutgoingRelationships(db, entity.id, entityType);
+  const relationshipsJSONL: RelationshipJSONL[] = relationships.map((rel) => ({
+    from: rel.from_id,
+    from_type: rel.from_type,
+    to: rel.to_id,
+    to_type: rel.to_type,
+    type: rel.relationship_type,
+  }));
+  const externalLinks =
+    entity.external_links ?? existingExternalLinks?.get(entity.id);
+  return {
+    relationships: sortRelationships(relationshipsJSONL),
+    tags: sortTags(getTags(db, entity.id, entityType)),
+    external_links: sortExternalLinks(externalLinks),
+  };
+}
+
 export function specToJSONL(
   db: Database.Database,
   spec: Spec,
   existingExternalLinks?: Map<string, ExternalLink[]>
 ): SpecJSONL {
-  // Get outgoing relationships
-  const relationships = getOutgoingRelationships(db, spec.id, "spec");
-
-  // Convert to JSONL format
-  const relationshipsJSONL: RelationshipJSONL[] = relationships.map((rel) => ({
-    from: rel.from_id,
-    from_type: rel.from_type,
-    to: rel.to_id,
-    to_type: rel.to_type,
-    type: rel.relationship_type,
-  }));
-
-  // Get tags
-  const tags = getTags(db, spec.id, "spec");
-
-  // Get external_links - prefer from spec if present, otherwise from existing JSONL
-  const externalLinks = spec.external_links ?? existingExternalLinks?.get(spec.id);
-
   return {
     ...spec,
-    // Sort arrays for deterministic output (reduces JSONL churn)
-    relationships: sortRelationships(relationshipsJSONL),
-    tags: sortTags(tags),
-    external_links: sortExternalLinks(externalLinks),
+    ...entityJSONLMetadata(db, spec, "spec", existingExternalLinks),
   };
 }
 
-/**
- * Convert an Issue to IssueJSONL format with embedded relationships and tags
- * @param existingExternalLinks - Optional map of issue ID to external links (preserved from existing JSONL)
- */
+export function adrToJSONL(
+  db: Database.Database,
+  adr: Adr,
+  existingExternalLinks?: Map<string, ExternalLink[]>
+): AdrJSONL {
+  return {
+    ...adr,
+    ...entityJSONLMetadata(db, adr, "adr", existingExternalLinks),
+  };
+}
+
 export function issueToJSONL(
   db: Database.Database,
   issue: Issue,
   existingExternalLinks?: Map<string, ExternalLink[]>
 ): IssueJSONL {
-  // Get outgoing relationships
-  const relationships = getOutgoingRelationships(db, issue.id, "issue");
-
-  // Convert to JSONL format
-  const relationshipsJSONL: RelationshipJSONL[] = relationships.map((rel) => ({
-    from: rel.from_id,
-    from_type: rel.from_type,
-    to: rel.to_id,
-    to_type: rel.to_type,
-    type: rel.relationship_type,
-  }));
-
-  // Get tags
-  const tags = getTags(db, issue.id, "issue");
-
-  // Get feedback provided by this issue
   const feedbackList = listFeedback(db, { from_id: issue.id });
   const feedbackJSONL: FeedbackJSONL[] = feedbackList.map((feedback) => ({
     id: feedback.id,
@@ -151,19 +152,11 @@ export function issueToJSONL(
     created_at: feedback.created_at,
     updated_at: feedback.updated_at,
   }));
-
-  // Get external_links - prefer from issue if present, otherwise from existing JSONL
-  const externalLinks = issue.external_links ?? existingExternalLinks?.get(issue.id);
-
-  // Sort arrays for deterministic output (reduces JSONL churn)
   const sortedFeedback = sortFeedback(feedbackJSONL);
-
   return {
     ...issue,
-    relationships: sortRelationships(relationshipsJSONL),
-    tags: sortTags(tags),
+    ...entityJSONLMetadata(db, issue, "issue", existingExternalLinks),
     feedback: sortedFeedback.length > 0 ? sortedFeedback : undefined,
-    external_links: sortExternalLinks(externalLinks),
   };
 }
 
@@ -188,6 +181,18 @@ export function exportSpecsToJSONL(
 
   // Convert to JSONL format with relationships, tags, and external_links
   return filtered.map((spec) => specToJSONL(db, spec, existingExternalLinks));
+}
+
+export function exportAdrsToJSONL(
+  db: Database.Database,
+  options: ExportOptions = {},
+  existingExternalLinks?: Map<string, ExternalLink[]>
+): AdrJSONL[] {
+  const adrs = listAdrs(db);
+  const filtered = options.since
+    ? adrs.filter((adr) => new Date(adr.updated_at) > options.since!)
+    : adrs;
+  return filtered.map((adr) => adrToJSONL(db, adr, existingExternalLinks));
 }
 
 /**
@@ -231,37 +236,39 @@ function readExistingExternalLinks<T extends { id: string; external_links?: Exte
 }
 
 /**
- * Export both specs and issues to JSONL files
+ * Export specs, issues, and ADRs to JSONL files
  * Preserves external_links from existing JSONL files
  */
 export async function exportToJSONL(
   db: Database.Database,
   options: ExportOptions = {}
-): Promise<{ specsCount: number; issuesCount: number }> {
+): Promise<{ specsCount: number; issuesCount: number; adrsCount: number }> {
   const {
     outputDir = ".sudocode",
-    specsFile = "specs.jsonl",
-    issuesFile = "issues.jsonl",
+    specsFile = getEntityRow("spec").jsonlFile,
+    issuesFile = getEntityRow("issue").jsonlFile,
+    adrsFile = getEntityRow("adr").jsonlFile,
   } = options;
 
   const specsPath = `${outputDir}/${specsFile}`;
   const issuesPath = `${outputDir}/${issuesFile}`;
+  const adrsPath = `${outputDir}/${adrsFile}`;
 
-  // Read existing external_links from JSONL files (to preserve them since SQLite doesn't store them)
   const existingSpecLinks = readExistingExternalLinks<SpecJSONL>(specsPath);
   const existingIssueLinks = readExistingExternalLinks<IssueJSONL>(issuesPath);
+  const existingAdrLinks = readExistingExternalLinks<AdrJSONL>(adrsPath);
 
-  // Export specs with preserved external_links
   const specs = exportSpecsToJSONL(db, options, existingSpecLinks);
   await writeJSONL(specsPath, specs);
-
-  // Export issues with preserved external_links
   const issues = exportIssuesToJSONL(db, options, existingIssueLinks);
   await writeJSONL(issuesPath, issues);
+  const adrs = exportAdrsToJSONL(db, options, existingAdrLinks);
+  await writeJSONL(adrsPath, adrs);
 
   return {
     specsCount: specs.length,
     issuesCount: issues.length,
+    adrsCount: adrs.length,
   };
 }
 

@@ -18,6 +18,7 @@ const badgeVariants = cva(
         issue:
           'border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20',
         spec: 'border-purple-500/20 bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-500/20',
+        adr: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20',
       },
     },
     defaultVariants: {

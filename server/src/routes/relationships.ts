@@ -5,7 +5,9 @@
  */
 
 import { Router, Request, Response } from "express";
-import type { EntityType, RelationshipType } from "@sudocode-ai/types";
+import { parseEntityType } from "@sudocode-ai/types/entities";
+import { parseRelationshipType } from "@sudocode-ai/cli/dist/validation.js";
+import { InvalidRelationshipError } from "@sudocode-ai/cli/dist/operations/relationships.js";
 import {
   createRelationship,
   deleteRelationship,
@@ -47,20 +49,10 @@ export function createRelationshipsRouter(): Router {
     try {
       const { entity_type, entity_id } = req.params;
 
-      // Validate entity_type
-      if (entity_type !== "spec" && entity_type !== "issue") {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "Invalid entity_type. Must be 'spec' or 'issue'",
-        });
-        return;
-      }
-
       const relationships = getEntityRelationships(
         req.project!.db,
         entity_id,
-        entity_type as EntityType
+        parseEntityType(entity_type)
       );
 
       res.json({
@@ -88,21 +80,15 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        // Validate entity_type
-        if (entity_type !== "spec" && entity_type !== "issue") {
-          res.status(400).json({
-            success: false,
-            data: null,
-            message: "Invalid entity_type. Must be 'spec' or 'issue'",
-          });
-          return;
-        }
+        const parsedEntityType = parseEntityType(entity_type);
 
         const relationships = getEntityOutgoingRelationships(
           req.project!.db,
           entity_id,
-          entity_type as EntityType,
-          relationship_type as RelationshipType | undefined
+          parsedEntityType,
+          relationship_type === undefined
+            ? undefined
+            : parseRelationshipType(relationship_type)
         );
 
         res.json({
@@ -131,21 +117,15 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        // Validate entity_type
-        if (entity_type !== "spec" && entity_type !== "issue") {
-          res.status(400).json({
-            success: false,
-            data: null,
-            message: "Invalid entity_type. Must be 'spec' or 'issue'",
-          });
-          return;
-        }
+        const parsedEntityType = parseEntityType(entity_type);
 
         const relationships = getEntityIncomingRelationships(
           req.project!.db,
           entity_id,
-          entity_type as EntityType,
-          relationship_type as RelationshipType | undefined
+          parsedEntityType,
+          relationship_type === undefined
+            ? undefined
+            : parseRelationshipType(relationship_type)
         );
 
         res.json({
@@ -188,15 +168,6 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      if (!from_type || (from_type !== "spec" && from_type !== "issue")) {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "from_type is required and must be 'spec' or 'issue'",
-        });
-        return;
-      }
-
       if (!to_id || typeof to_id !== "string") {
         res.status(400).json({
           success: false,
@@ -206,49 +177,12 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      if (!to_type || (to_type !== "spec" && to_type !== "issue")) {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "to_type is required and must be 'spec' or 'issue'",
-        });
-        return;
-      }
-
-      if (!relationship_type || typeof relationship_type !== "string") {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "relationship_type is required and must be a string",
-        });
-        return;
-      }
-
-      // Validate relationship_type
-      const validTypes = [
-        "blocks",
-        "related",
-        "discovered-from",
-        "implements",
-        "references",
-        "depends-on",
-      ];
-      if (!validTypes.includes(relationship_type)) {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: `Invalid relationship_type. Must be one of: ${validTypes.join(", ")}`,
-        });
-        return;
-      }
-
-      // Create relationship using CLI operation
       const relationship = createRelationship(req.project!.db, {
         from_id,
-        from_type: from_type as EntityType,
+        from_type: parseEntityType(from_type),
         to_id,
-        to_type: to_type as EntityType,
-        relationship_type: relationship_type as RelationshipType,
+        to_type: parseEntityType(to_type),
+        relationship_type: parseRelationshipType(relationship_type),
         metadata: metadata || null,
       });
 
@@ -267,6 +201,14 @@ export function createRelationshipsRouter(): Router {
 
       // Handle specific errors
       if (error instanceof Error) {
+        if (error instanceof InvalidRelationshipError) {
+          res.status(400).json({
+            success: false,
+            data: null,
+            message: error.message,
+          });
+          return;
+        }
         if (error.message.includes("not found")) {
           res.status(404).json({
             success: false,
@@ -313,15 +255,6 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      if (!from_type || (from_type !== "spec" && from_type !== "issue")) {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "from_type is required and must be 'spec' or 'issue'",
-        });
-        return;
-      }
-
       if (!to_id || typeof to_id !== "string") {
         res.status(400).json({
           success: false,
@@ -331,32 +264,13 @@ export function createRelationshipsRouter(): Router {
         return;
       }
 
-      if (!to_type || (to_type !== "spec" && to_type !== "issue")) {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "to_type is required and must be 'spec' or 'issue'",
-        });
-        return;
-      }
-
-      if (!relationship_type || typeof relationship_type !== "string") {
-        res.status(400).json({
-          success: false,
-          data: null,
-          message: "relationship_type is required and must be a string",
-        });
-        return;
-      }
-
-      // Delete relationship using CLI operation
       const deleted = deleteRelationship(
         req.project!.db,
         from_id,
-        from_type as EntityType,
+        parseEntityType(from_type),
         to_id,
-        to_type as EntityType,
-        relationship_type as RelationshipType
+        parseEntityType(to_type),
+        parseRelationshipType(relationship_type)
       );
 
       if (deleted) {

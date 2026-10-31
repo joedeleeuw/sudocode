@@ -11,6 +11,8 @@
 
 import * as crypto from "crypto";
 import type Database from "better-sqlite3";
+import type { EntityType } from "@sudocode-ai/types";
+import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
 
 /**
  * Calculate adaptive hash length based on entity count
@@ -65,33 +67,47 @@ export function hashUUIDToBase36(uuid: string, length: number): string {
   return result;
 }
 
-/**
- * Generate hash-based ID from UUID with collision checking
- */
+function countEntities(db: Database.Database, entityType: EntityType): number {
+  const row = getEntityRow(entityType);
+  const result: unknown = db
+    .prepare(`SELECT COUNT(*) as count FROM ${row.table}`)
+    .get();
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    !("count" in result) ||
+    typeof result.count !== "number"
+  ) {
+    throw new Error(`Failed to count ${row.pluralLabel}`);
+  }
+  return result.count;
+}
+
 function generateHashIDFromUUID(
   db: Database.Database,
   uuid: string,
-  entityType: "spec" | "issue",
+  entityType: EntityType,
   count: number
 ): string {
-  const prefix = entityType === "spec" ? "s" : "i";
+  const row = getEntityRow(entityType);
   const baseLength = getAdaptiveHashLength(count);
 
   // Try progressively longer hashes on collision (very rare)
   for (let length = baseLength; length <= 8; length++) {
     const hash = hashUUIDToBase36(uuid, length);
-    const candidate = `${prefix}-${hash}`;
-
-    // Check if this ID already exists
-    const table = entityType === "spec" ? "specs" : "issues";
-    const existsStmt = db.prepare(
-      `SELECT COUNT(*) as count FROM ${table} WHERE id = ?`
-    );
-    const result = existsStmt.get(candidate) as { count: number };
-
-    if (result.count === 0) {
-      return candidate;
+    const candidate = `${row.prefix}-${hash}`;
+    const result: unknown = db
+      .prepare(`SELECT COUNT(*) as count FROM ${row.table} WHERE id = ?`)
+      .get(candidate);
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("count" in result) ||
+      typeof result.count !== "number"
+    ) {
+      throw new Error(`Failed to check ID collision for ${candidate}`);
     }
+    if (result.count === 0) return candidate;
   }
 
   throw new Error(
@@ -107,48 +123,49 @@ export function isLegacyID(id: string): boolean {
 }
 
 /**
- * Check if ID is hash format (i-x7k9, s-a3f2)
+ * Check if ID is hash format (i-x7k9, s-a3f2, a-p4m8)
  */
 export function isHashID(id: string): boolean {
-  return /^[is]-[0-9a-z]{4,8}$/.test(id);
+  const prefix = id.split("-", 1)[0];
+  return (
+    ENTITY_ROWS.some((row) => row.prefix === prefix) &&
+    /^[a-z]-[0-9a-z]{4,8}$/.test(id)
+  );
 }
 
-/**
- * Generate spec ID and UUID
- * Returns hash-based ID derived from UUID
- */
+export function generateEntityId(
+  db: Database.Database,
+  entityType: EntityType
+): { id: string; uuid: string } {
+  const uuid = crypto.randomUUID();
+  const id = generateHashIDFromUUID(
+    db,
+    uuid,
+    entityType,
+    countEntities(db, entityType)
+  );
+  return { id, uuid };
+}
+
 export function generateSpecId(
   db: Database.Database,
-  outputDir: string
+  _outputDir: string
 ): { id: string; uuid: string } {
-  const uuid = crypto.randomUUID();
-
-  // Count existing specs for adaptive length
-  const countStmt = db.prepare(`SELECT COUNT(*) as count FROM specs`);
-  const result = countStmt.get() as { count: number };
-
-  const id = generateHashIDFromUUID(db, uuid, "spec", result.count);
-
-  return { id, uuid };
+  return generateEntityId(db, "spec");
 }
 
-/**
- * Generate issue ID and UUID
- * Returns hash-based ID derived from UUID
- */
 export function generateIssueId(
   db: Database.Database,
-  outputDir: string
+  _outputDir: string
 ): { id: string; uuid: string } {
-  const uuid = crypto.randomUUID();
+  return generateEntityId(db, "issue");
+}
 
-  // Count existing issues for adaptive length
-  const countStmt = db.prepare(`SELECT COUNT(*) as count FROM issues`);
-  const result = countStmt.get() as { count: number };
-
-  const id = generateHashIDFromUUID(db, uuid, "issue", result.count);
-
-  return { id, uuid };
+export function generateAdrId(
+  db: Database.Database,
+  _outputDir: string
+): { id: string; uuid: string } {
+  return generateEntityId(db, "adr");
 }
 
 /**
@@ -222,22 +239,11 @@ export function generateUUID(): string {
  * Infer entity type from ID
  * Supports both hash-based (i-xxxx, s-xxxx) and legacy (ISSUE-xxx, SPEC-xxx) formats
  */
-export function getEntityTypeFromId(id: string): "spec" | "issue" {
-  // Hash format: i-xxxx for issues, s-xxxx for specs
-  if (id.startsWith("i-")) {
-    return "issue";
+export function getEntityTypeFromId(id: string): EntityType {
+  for (const row of ENTITY_ROWS) {
+    if (id.startsWith(`${row.prefix}-`) || id.startsWith(`${row.label.toUpperCase()}-`)) {
+      return row.type;
+    }
   }
-  if (id.startsWith("s-")) {
-    return "spec";
-  }
-
-  // Legacy format: ISSUE-xxx for issues, SPEC-xxx for specs
-  if (id.startsWith("ISSUE-")) {
-    return "issue";
-  }
-  if (id.startsWith("SPEC-")) {
-    return "spec";
-  }
-
   throw new Error(`Cannot infer entity type from ID: ${id}`);
 }

@@ -9,6 +9,7 @@
 // Re-export core types from the main package
 export type {
   Spec,
+  Adr,
   Issue,
   Relationship,
   EntityType,

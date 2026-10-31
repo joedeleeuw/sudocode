@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * sudocode CLI - Git-native spec and issue management
+ * sudocode CLI - Git-native spec, issue, and ADR management
  */
 
 import { Command } from "commander";
@@ -27,6 +27,13 @@ import {
   handleIssueClose,
   handleIssueDelete,
 } from "./cli/issue-commands.js";
+import {
+  handleAdrCreate,
+  handleAdrList,
+  handleAdrShow,
+  handleAdrUpdate,
+  handleAdrArchive,
+} from "./cli/adr-commands.js";
 import { handleLink } from "./cli/relationship-commands.js";
 import { handleAddReference } from "./cli/reference-commands.js";
 import { handleReady, handleBlocked } from "./cli/query-commands.js";
@@ -73,6 +80,8 @@ import {
 } from "./cli/config-commands.js";
 import { getUpdateNotification } from "./update-checker.js";
 import { VERSION } from "./version.js";
+import { importFromJSONL } from "./import.js";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 // Global state
 let db: Database.Database | null = null;
@@ -146,15 +155,20 @@ program
   .version(VERSION)
   .option("--db <path>", "Database path (default: auto-discover)")
   .option("--json", "Output in JSON format")
-  .hook("preAction", (thisCommand: Command) => {
-    // Get global options
+  .hook("preAction", async (thisCommand: Command) => {
     const opts = thisCommand.optsWithGlobals();
     if (opts.db) dbPath = opts.db;
     if (opts.json) jsonOutput = true;
 
-    // Skip DB init for init command
     if (thisCommand.name() !== "init") {
       initDB();
+      const skipHydration = new Set(["import", "resolve-conflicts", "merge-driver"]);
+      const hasTrackedEntities = ENTITY_ROWS.some((row) =>
+        fs.existsSync(path.join(outputDir, row.jsonlFile))
+      );
+      if (db && hasTrackedEntities && !skipHydration.has(thisCommand.name())) {
+        await importFromJSONL(db, { inputDir: outputDir });
+      }
     }
   })
   .hook("postAction", () => {
@@ -245,6 +259,60 @@ spec
   .option("--format <format>", "Format: inline or newline", "inline")
   .action(async (entityId, referenceId, options) => {
     await handleAddReference(getContext(), entityId, referenceId, options);
+  });
+
+// ============================================================================
+// ADR COMMANDS
+// ============================================================================
+
+const adr = program
+  .command("adr")
+  .alias("adrs")
+  .description("Manage architecture decision records");
+
+adr
+  .command("create <title>")
+  .description("Create a new ADR")
+  .option("-d, --description <desc>", "Decision context, decision, and rationale")
+  .option("--file-path <path>", "File path for markdown")
+  .option("--tags <tags>", "Comma-separated tags")
+  .action(async (title, options) => {
+    await handleAdrCreate(getContext(), title, options);
+  });
+
+adr
+  .command("list")
+  .description("List ADRs")
+  .option("-g, --grep <query>", "Search by title or content")
+  .option("--archived <bool>", "Filter by archive status (true/false)")
+  .option("--limit <num>", "Limit results", "50")
+  .action(async (options) => {
+    await handleAdrList(getContext(), options);
+  });
+
+adr
+  .command("show <id>")
+  .description("Show ADR details and derived supersession")
+  .action(async (id) => {
+    await handleAdrShow(getContext(), id);
+  });
+
+adr
+  .command("update <id>")
+  .description("Update an ADR")
+  .option("--title <title>", "New title")
+  .option("-d, --description <desc>", "New content")
+  .option("--tags <tags>", "New comma-separated tags")
+  .option("--archived <bool>", "Archive status (true/false)")
+  .action(async (id, options) => {
+    await handleAdrUpdate(getContext(), id, options);
+  });
+
+adr
+  .command("archive <id>")
+  .description("Archive a withdrawn ADR")
+  .action(async (id) => {
+    await handleAdrArchive(getContext(), id);
   });
 
 // ============================================================================

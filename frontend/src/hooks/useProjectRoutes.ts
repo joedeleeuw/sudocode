@@ -42,6 +42,8 @@ export function useProjectRoutes() {
       specs: () => buildPath('/specs'),
       spec: (id: string) => buildPath(`/specs/${id}`),
       archivedSpecs: () => buildPath('/specs/archived'),
+      adrs: () => buildPath('/adrs'),
+      adr: (id: string) => buildPath(`/adrs/${id}`),
       executions: () => buildPath('/executions'),
       execution: (id: string) => buildPath(`/executions/${id}`),
       workflows: () => buildPath('/workflows'),

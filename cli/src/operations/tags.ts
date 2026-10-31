@@ -4,6 +4,8 @@
 
 import type Database from "better-sqlite3";
 import type { Tag, EntityType } from "../types.js";
+import { getEntityRow } from "@sudocode-ai/types/entities";
+import { getEntityIdentity } from "./entities.js";
 
 /**
  * Add a tag to an entity
@@ -14,16 +16,10 @@ export function addTag(
   entity_type: EntityType,
   tag: string
 ): Tag {
-  // Get entity UUID
-  const table = entity_type === "spec" ? "specs" : "issues";
-  const entity = db
-    .prepare(`SELECT uuid FROM ${table} WHERE id = ?`)
-    .get(entity_id) as { uuid: string } | undefined;
-
+  const row = getEntityRow(entity_type);
+  const entity = getEntityIdentity(db, entity_id, entity_type);
   if (!entity) {
-    throw new Error(
-      `${entity_type === "spec" ? "Spec" : "Issue"} not found: ${entity_id}`
-    );
+    throw new Error(`${row.label} not found: ${entity_id}`);
   }
 
   const stmt = db.prepare(`

@@ -14,6 +14,8 @@ import { exportToJSONL } from "@sudocode-ai/cli/dist/export.js";
 import { syncJSONLToMarkdown } from "@sudocode-ai/cli/dist/sync.js";
 import { getConfig, isMarkdownFirst } from "@sudocode-ai/cli/dist/config.js";
 import { syncFileWithRename } from "@sudocode-ai/cli/dist/filename-generator.js";
+import type { EntityType } from "@sudocode-ai/types";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 import { getSudocodeDir } from "../utils/sudocode-dir.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -75,29 +77,32 @@ async function executeFullExport(db: Database.Database, outputDir?: string): Pro
 export async function syncEntityToMarkdown(
   db: Database.Database,
   entityId: string,
-  entityType: "spec" | "issue",
+  entityType: EntityType,
   outputDir?: string
 ): Promise<void> {
   const dir = outputDir || getSudocodeDir();
+  const row = getEntityRow(entityType);
 
   if (entityType === "issue") {
     const { getIssueById } = await import("./issues.js");
     const issue = getIssueById(db, entityId);
     if (issue) {
-      const issuesDir = path.join(dir, "issues");
+      const issuesDir = path.join(dir, row.markdownDir);
       const mdPath = syncFileWithRename(issue.id, issuesDir, issue.title);
-      await syncJSONLToMarkdown(db, issue.id, "issue", mdPath);
+      await syncJSONLToMarkdown(db, issue.id, entityType, mdPath);
     }
-  } else {
-    const { getSpecById } = await import("./specs.js");
-    const spec = getSpecById(db, entityId);
-    if (spec) {
-      const specsDir = path.join(dir, "specs");
-      const mdPath = spec.file_path && fs.existsSync(path.join(dir, spec.file_path))
-        ? path.join(dir, spec.file_path)
-        : syncFileWithRename(spec.id, specsDir, spec.title);
-      await syncJSONLToMarkdown(db, spec.id, "spec", mdPath);
-    }
+    return;
+  }
+
+  const document = entityType === "spec"
+    ? (await import("./specs.js")).getSpecById(db, entityId)
+    : (await import("./adrs.js")).getAdrById(db, entityId);
+  if (document) {
+    const entityDir = path.join(dir, row.markdownDir);
+    const mdPath = document.file_path && fs.existsSync(path.join(dir, document.file_path))
+      ? path.join(dir, document.file_path)
+      : syncFileWithRename(document.id, entityDir, document.title);
+    await syncJSONLToMarkdown(db, document.id, entityType, mdPath);
   }
 }
 

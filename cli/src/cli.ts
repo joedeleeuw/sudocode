@@ -27,13 +27,7 @@ import {
   handleIssueClose,
   handleIssueDelete,
 } from "./cli/issue-commands.js";
-import {
-  handleAdrCreate,
-  handleAdrList,
-  handleAdrShow,
-  handleAdrUpdate,
-  handleAdrArchive,
-} from "./cli/adr-commands.js";
+import { registerAdrCommands } from "./cli/adr-commands.js";
 import { handleLink } from "./cli/relationship-commands.js";
 import { handleAddReference } from "./cli/reference-commands.js";
 import { handleReady, handleBlocked } from "./cli/query-commands.js";
@@ -261,59 +255,7 @@ spec
     await handleAddReference(getContext(), entityId, referenceId, options);
   });
 
-// ============================================================================
-// ADR COMMANDS
-// ============================================================================
-
-const adr = program
-  .command("adr")
-  .alias("adrs")
-  .description("Manage architecture decision records");
-
-adr
-  .command("create <title>")
-  .description("Create a new ADR")
-  .option("-d, --description <desc>", "Decision context, decision, and rationale")
-  .option("--file-path <path>", "File path for markdown")
-  .option("--tags <tags>", "Comma-separated tags")
-  .action(async (title, options) => {
-    await handleAdrCreate(getContext(), title, options);
-  });
-
-adr
-  .command("list")
-  .description("List ADRs")
-  .option("-g, --grep <query>", "Search by title or content")
-  .option("--archived <bool>", "Filter by archive status (true/false)")
-  .option("--limit <num>", "Limit results", "50")
-  .action(async (options) => {
-    await handleAdrList(getContext(), options);
-  });
-
-adr
-  .command("show <id>")
-  .description("Show ADR details and derived supersession")
-  .action(async (id) => {
-    await handleAdrShow(getContext(), id);
-  });
-
-adr
-  .command("update <id>")
-  .description("Update an ADR")
-  .option("--title <title>", "New title")
-  .option("-d, --description <desc>", "New content")
-  .option("--tags <tags>", "New comma-separated tags")
-  .option("--archived <bool>", "Archive status (true/false)")
-  .action(async (id, options) => {
-    await handleAdrUpdate(getContext(), id, options);
-  });
-
-adr
-  .command("archive <id>")
-  .description("Archive a withdrawn ADR")
-  .action(async (id) => {
-    await handleAdrArchive(getContext(), id);
-  });
+registerAdrCommands(program, getContext);
 
 // ============================================================================
 // ISSUE COMMANDS

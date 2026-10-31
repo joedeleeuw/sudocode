@@ -7,7 +7,12 @@
 import { Router, Request, Response } from "express";
 import { parseEntityType } from "@sudocode-ai/types/entities";
 import { parseRelationshipType } from "@sudocode-ai/cli/dist/validation.js";
-import { InvalidRelationshipError } from "@sudocode-ai/cli/dist/operations/relationships.js";
+import {
+  EntityNotFoundError,
+  InvalidRelationshipError,
+  RelationshipExistsError,
+} from "@sudocode-ai/cli/dist/operations/relationships.js";
+import { InputError } from "@sudocode-ai/types/errors";
 import {
   createRelationship,
   deleteRelationship,
@@ -18,6 +23,41 @@ import {
 } from "../services/relationships.js";
 import { broadcastRelationshipUpdate } from "../services/websocket.js";
 import { triggerExport } from "../services/export.js";
+
+function sendRelationshipError(
+  res: Response,
+  error: unknown,
+  fallbackMessage: string
+): void {
+  if (error instanceof InputError) {
+    res.status(400).json({
+      success: false,
+      data: null,
+      error_data: { field: error.field, validValues: error.validValues },
+      message: error.message,
+    });
+    return;
+  }
+  if (error instanceof InvalidRelationshipError) {
+    res.status(400).json({ success: false, data: null, message: error.message });
+    return;
+  }
+  if (error instanceof EntityNotFoundError) {
+    res.status(404).json({ success: false, data: null, message: error.message });
+    return;
+  }
+  if (error instanceof RelationshipExistsError) {
+    res.status(409).json({ success: false, data: null, message: error.message });
+    return;
+  }
+  console.error(fallbackMessage, error);
+  res.status(500).json({
+    success: false,
+    data: null,
+    error_data: error instanceof Error ? error.message : String(error),
+    message: fallbackMessage,
+  });
+}
 
 export function createRelationshipsRouter(): Router {
   const router = Router();
@@ -32,13 +72,7 @@ export function createRelationshipsRouter(): Router {
         data: getAllProjectRelationships(req.project!.db),
       });
     } catch (error) {
-      console.error("Error listing relationships:", error);
-      res.status(500).json({
-        success: false,
-        data: null,
-        error_data: error instanceof Error ? error.message : String(error),
-        message: "Failed to list relationships",
-      });
+      sendRelationshipError(res, error, "Failed to list relationships");
     }
   });
 
@@ -52,7 +86,7 @@ export function createRelationshipsRouter(): Router {
       const relationships = getEntityRelationships(
         req.project!.db,
         entity_id,
-        parseEntityType(entity_type)
+        parseEntityType(entity_type, "entity_type")
       );
 
       res.json({
@@ -60,13 +94,7 @@ export function createRelationshipsRouter(): Router {
         data: relationships,
       });
     } catch (error) {
-      console.error("Error getting relationships:", error);
-      res.status(500).json({
-        success: false,
-        data: null,
-        error_data: error instanceof Error ? error.message : String(error),
-        message: "Failed to get relationships",
-      });
+      sendRelationshipError(res, error, "Failed to get relationships");
     }
   });
 
@@ -80,7 +108,7 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        const parsedEntityType = parseEntityType(entity_type);
+        const parsedEntityType = parseEntityType(entity_type, "entity_type");
 
         const relationships = getEntityOutgoingRelationships(
           req.project!.db,
@@ -88,7 +116,7 @@ export function createRelationshipsRouter(): Router {
           parsedEntityType,
           relationship_type === undefined
             ? undefined
-            : parseRelationshipType(relationship_type)
+            : parseRelationshipType(relationship_type, "relationship_type")
         );
 
         res.json({
@@ -96,13 +124,7 @@ export function createRelationshipsRouter(): Router {
           data: relationships,
         });
       } catch (error) {
-        console.error("Error getting outgoing relationships:", error);
-        res.status(500).json({
-          success: false,
-          data: null,
-          error_data: error instanceof Error ? error.message : String(error),
-          message: "Failed to get outgoing relationships",
-        });
+        sendRelationshipError(res, error, "Failed to get outgoing relationships");
       }
     }
   );
@@ -117,7 +139,7 @@ export function createRelationshipsRouter(): Router {
         const { entity_type, entity_id } = req.params;
         const { relationship_type } = req.query;
 
-        const parsedEntityType = parseEntityType(entity_type);
+        const parsedEntityType = parseEntityType(entity_type, "entity_type");
 
         const relationships = getEntityIncomingRelationships(
           req.project!.db,
@@ -125,7 +147,7 @@ export function createRelationshipsRouter(): Router {
           parsedEntityType,
           relationship_type === undefined
             ? undefined
-            : parseRelationshipType(relationship_type)
+            : parseRelationshipType(relationship_type, "relationship_type")
         );
 
         res.json({
@@ -133,13 +155,7 @@ export function createRelationshipsRouter(): Router {
           data: relationships,
         });
       } catch (error) {
-        console.error("Error getting incoming relationships:", error);
-        res.status(500).json({
-          success: false,
-          data: null,
-          error_data: error instanceof Error ? error.message : String(error),
-          message: "Failed to get incoming relationships",
-        });
+        sendRelationshipError(res, error, "Failed to get incoming relationships");
       }
     }
   );
@@ -179,10 +195,10 @@ export function createRelationshipsRouter(): Router {
 
       const relationship = createRelationship(req.project!.db, {
         from_id,
-        from_type: parseEntityType(from_type),
+        from_type: parseEntityType(from_type, "from_type"),
         to_id,
-        to_type: parseEntityType(to_type),
-        relationship_type: parseRelationshipType(relationship_type),
+        to_type: parseEntityType(to_type, "to_type"),
+        relationship_type: parseRelationshipType(relationship_type, "relationship_type"),
         metadata: metadata || null,
       });
 
@@ -197,43 +213,7 @@ export function createRelationshipsRouter(): Router {
         data: relationship,
       });
     } catch (error) {
-      console.error("Error creating relationship:", error);
-
-      // Handle specific errors
-      if (error instanceof Error) {
-        if (error instanceof InvalidRelationshipError) {
-          res.status(400).json({
-            success: false,
-            data: null,
-            message: error.message,
-          });
-          return;
-        }
-        if (error.message.includes("not found")) {
-          res.status(404).json({
-            success: false,
-            data: null,
-            message: error.message,
-          });
-          return;
-        }
-
-        if (error.message.includes("already exists")) {
-          res.status(409).json({
-            success: false,
-            data: null,
-            message: error.message,
-          });
-          return;
-        }
-      }
-
-      res.status(500).json({
-        success: false,
-        data: null,
-        error_data: error instanceof Error ? error.message : String(error),
-        message: "Failed to create relationship",
-      });
+      sendRelationshipError(res, error, "Failed to create relationship");
     }
   });
 
@@ -267,10 +247,10 @@ export function createRelationshipsRouter(): Router {
       const deleted = deleteRelationship(
         req.project!.db,
         from_id,
-        parseEntityType(from_type),
+        parseEntityType(from_type, "from_type"),
         to_id,
-        parseEntityType(to_type),
-        parseRelationshipType(relationship_type)
+        parseEntityType(to_type, "to_type"),
+        parseRelationshipType(relationship_type, "relationship_type")
       );
 
       if (deleted) {
@@ -305,13 +285,7 @@ export function createRelationshipsRouter(): Router {
         });
       }
     } catch (error) {
-      console.error("Error deleting relationship:", error);
-      res.status(500).json({
-        success: false,
-        data: null,
-        error_data: error instanceof Error ? error.message : String(error),
-        message: "Failed to delete relationship",
-      });
+      sendRelationshipError(res, error, "Failed to delete relationship");
     }
   });
 

@@ -18,7 +18,7 @@ import { getEntityRow } from '@sudocode-ai/types/entities';
 import { createFeedbackAnchor, createAnchorByText } from '../operations/feedback-anchors.js';
 import { exportToJSONL } from '../export.js';
 import type { FeedbackType } from '../types.js';
-import { getEntityTypeFromId } from '../id-generator.js';
+import { getEntityTypeFromId } from '@sudocode-ai/types/entities';
 import {
   isValidFeedbackType,
   getValidFeedbackTypes,

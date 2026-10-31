@@ -11,8 +11,12 @@ import * as fs from "fs";
 import type { IssueJSONL, AdrJSONL, SpecJSONL } from "./types.js";
 import { toYaml, fromYaml } from "./yaml-converter.js";
 import { mergeYamlContent } from "./git-merge.js";
+import {
+  resolveIdentityCollisions,
+  type IdentityRecord,
+} from "./identity-collisions.js";
 
-export type JSONLEntity = IssueJSONL | AdrJSONL | SpecJSONL | Record<string, any>;
+export type JSONLEntity = IssueJSONL | AdrJSONL | SpecJSONL | (Record<string, any> & IdentityRecord);
 
 /**
  * Conflict section from parsing git conflict markers
@@ -217,13 +221,6 @@ function compareTimestamps(
   const dateB = new Date(normalizeTs(b));
 
   return dateA.getTime() - dateB.getTime();
-}
-
-/**
- * Generate deterministic conflict ID
- */
-function generateConflictId(originalId: string, uuid: string): string {
-  return `${originalId}-conflict-${uuid.slice(0, 8)}`;
 }
 
 /**
@@ -473,9 +470,6 @@ export function resolveEntities<T extends JSONLEntity>(
         const entity = { ...sorted[i] } as T;
         originalIds.push(entity.id);
 
-        // Always rename older versions
-        entity.id = generateConflictId(entity.id, uuid);
-
         resolvedIds.push(entity.id);
         resolved.push(entity);
       }
@@ -490,35 +484,16 @@ export function resolveEntities<T extends JSONLEntity>(
     }
   }
 
-  // Handle ID collisions across different UUIDs (hash collisions)
-  const idCounts = new Map<string, number>();
-  const finalResolved: T[] = [];
-
-  for (const entity of resolved) {
-    const currentId = entity.id;
-
-    if (!idCounts.has(currentId)) {
-      // First entity with this ID
-      idCounts.set(currentId, 1);
-      finalResolved.push(entity);
-    } else {
-      // ID collision - rename with suffix
-      const count = idCounts.get(currentId)!;
-      const newEntity = { ...entity } as T;
-      const newId = `${currentId}.${count}`;
-      newEntity.id = newId;
-
-      idCounts.set(currentId, count + 1);
-      finalResolved.push(newEntity);
-
-      stats.conflicts.push({
-        type: "different-uuids",
-        uuid: entity.uuid,
-        originalIds: [currentId],
-        resolvedIds: [newId],
-        action: `Renamed ID to resolve hash collision (different UUIDs)`,
-      });
-    }
+  const identityResolution = resolveIdentityCollisions(resolved);
+  const finalResolved = identityResolution.entities;
+  for (const collision of identityResolution.collisions) {
+    stats.conflicts.push({
+      type: "different-uuids",
+      uuid: collision.uuid,
+      originalIds: [collision.oldId],
+      resolvedIds: [collision.newId],
+      action: `Renamed ${collision.oldId} to ${collision.newId} to resolve an identity collision`,
+    });
   }
 
   // Sort by created_at (git-friendly)
@@ -890,35 +865,16 @@ export function mergeThreeWay<T extends JSONLEntity>(
     mergedEntities.push(mergedEntity);
   }
 
-  // Step 3: Handle ID collisions (hash conflicts)
-  const idCounts = new Map<string, number>();
-  const finalResolved: T[] = [];
-
-  for (const entity of mergedEntities) {
-    const currentId = entity.id;
-
-    if (!idCounts.has(currentId)) {
-      // First entity with this ID
-      idCounts.set(currentId, 1);
-      finalResolved.push(entity);
-    } else {
-      // ID collision - rename with suffix
-      const count = idCounts.get(currentId)!;
-      const newEntity = { ...entity } as T;
-      const newId = `${currentId}.${count}`;
-      newEntity.id = newId;
-
-      idCounts.set(currentId, count + 1);
-      finalResolved.push(newEntity);
-
-      stats.conflicts.push({
-        type: "different-uuids",
-        uuid: entity.uuid,
-        originalIds: [currentId],
-        resolvedIds: [newId],
-        action: `Renamed ID to resolve hash collision (different UUIDs)`,
-      });
-    }
+  const identityResolution = resolveIdentityCollisions(mergedEntities);
+  const finalResolved = identityResolution.entities;
+  for (const collision of identityResolution.collisions) {
+    stats.conflicts.push({
+      type: "different-uuids",
+      uuid: collision.uuid,
+      originalIds: [collision.oldId],
+      resolvedIds: [collision.newId],
+      action: `Renamed ${collision.oldId} to ${collision.newId} to resolve an identity collision`,
+    });
   }
 
   // Step 4: Sort by created_at (git-friendly)

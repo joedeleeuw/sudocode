@@ -16,6 +16,20 @@ export class InvalidRelationshipError extends Error {
   }
 }
 
+export class EntityNotFoundError extends Error {
+  constructor(entityType: EntityType, id: string) {
+    super(`${getEntityRow(entityType).label} not found: ${id}`);
+    this.name = "EntityNotFoundError";
+  }
+}
+
+export class RelationshipExistsError extends Error {
+  constructor(input: CreateRelationshipInput) {
+    super(`Relationship already exists: ${input.from_id} (${input.from_type}) --[${input.relationship_type}]--> ${input.to_id} (${input.to_type})`);
+    this.name = "RelationshipExistsError";
+  }
+}
+
 export interface CreateRelationshipInput {
   from_id: string;
   from_type: EntityType;
@@ -23,6 +37,43 @@ export interface CreateRelationshipInput {
   to_type: EntityType;
   relationship_type: RelationshipType;
   metadata?: string;
+}
+
+function validateSupersession(
+  db: Database.Database,
+  input: CreateRelationshipInput,
+  fromEntity: { id: string; uuid: string },
+  toEntity: { id: string; uuid: string }
+): void {
+  if (input.relationship_type !== "supersedes") return;
+  if (input.from_type !== "adr" || input.to_type !== "adr") {
+    throw new InvalidRelationshipError(
+      `supersedes requires an ADR source and target; received ${input.from_type} -> ${input.to_type}`
+    );
+  }
+  if (fromEntity.uuid === toEntity.uuid) {
+    throw new InvalidRelationshipError(
+      `ADR ${input.from_id} cannot supersede itself`
+    );
+  }
+  const cycle: unknown = db.prepare(`
+    WITH RECURSIVE reachable(uuid) AS (
+      SELECT to_uuid FROM relationships
+      WHERE from_uuid = ? AND from_type = 'adr' AND to_type = 'adr'
+        AND relationship_type = 'supersedes'
+      UNION
+      SELECT relationship.to_uuid FROM relationships relationship
+      JOIN reachable ON relationship.from_uuid = reachable.uuid
+      WHERE relationship.from_type = 'adr' AND relationship.to_type = 'adr'
+        AND relationship.relationship_type = 'supersedes'
+    )
+    SELECT 1 AS found FROM reachable WHERE uuid = ? LIMIT 1
+  `).get(toEntity.uuid, fromEntity.uuid);
+  if (cycle !== undefined) {
+    throw new InvalidRelationshipError(
+      `supersedes ${input.from_id} -> ${input.to_id} would create a cycle`
+    );
+  }
 }
 
 /**
@@ -39,26 +90,17 @@ export function addRelationship(
     );
   }
 
-  if (
-    input.relationship_type === "supersedes" &&
-    (input.from_type !== "adr" || input.to_type !== "adr")
-  ) {
-    throw new InvalidRelationshipError(
-      `supersedes requires an ADR source and target; received ${input.from_type} -> ${input.to_type}`
-    );
-  }
-
-  const fromRow = getEntityRow(input.from_type);
   const fromEntity = getEntityIdentity(db, input.from_id, input.from_type);
   if (!fromEntity) {
-    throw new Error(`${fromRow.label} not found: ${input.from_id}`);
+    throw new EntityNotFoundError(input.from_type, input.from_id);
   }
 
-  const toRow = getEntityRow(input.to_type);
   const toEntity = getEntityIdentity(db, input.to_id, input.to_type);
   if (!toEntity) {
-    throw new Error(`${toRow.label} not found: ${input.to_id}`);
+    throw new EntityNotFoundError(input.to_type, input.to_id);
   }
+
+  validateSupersession(db, input, fromEntity, toEntity);
 
   // Check if relationship already exists
   const existing = getRelationship(
@@ -129,9 +171,7 @@ export function addRelationship(
     return rel;
   } catch (error: any) {
     if (error.code && error.code.startsWith("SQLITE_CONSTRAINT")) {
-      throw new Error(
-        `Relationship already exists: ${input.from_id} (${input.from_type}) --[${input.relationship_type}]--> ${input.to_id} (${input.to_type})`
-      );
+      throw new RelationshipExistsError(input);
     }
     throw error;
   }

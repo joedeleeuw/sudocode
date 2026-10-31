@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import type { Command } from "commander";
 import * as path from "path";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
@@ -6,7 +7,6 @@ import type { UpdateAdrInput } from "../operations/adrs.js";
 import {
   createAdr,
   getAdr,
-  isAdrSuperseded,
   listAdrs,
   searchAdrs,
   updateAdr,
@@ -103,11 +103,10 @@ export async function handleAdrList(
     }
     console.log(chalk.bold(`\nFound ${adrs.length} ADR(s):\n`));
     for (const adr of adrs) {
-      const superseded = isAdrSuperseded(ctx.db, adr.id);
       console.log(
         chalk.cyan(adr.id),
         adr.title,
-        superseded ? chalk.yellow("[superseded]") : ""
+        adr.superseded ? chalk.yellow("[superseded]") : ""
       );
       console.log(chalk.gray(`  ${adr.file_path}`));
     }
@@ -133,13 +132,9 @@ export async function handleAdrShow(
     const incoming = getIncomingRelationships(ctx.db, id, "adr");
     const tags = getTags(ctx.db, id, "adr");
     const feedback = listFeedback(ctx.db, { to_id: id });
-    const superseded = incoming.some(
-      (relationship) => relationship.relationship_type === "supersedes"
-    );
     if (ctx.jsonOutput) {
       console.log(JSON.stringify({
         ...adr,
-        superseded,
         relationships: { outgoing, incoming },
         tags,
         feedback,
@@ -149,7 +144,7 @@ export async function handleAdrShow(
     console.log();
     console.log(chalk.bold.cyan(adr.id), chalk.bold(adr.title));
     console.log(chalk.gray("─".repeat(60)));
-    console.log(chalk.gray("State:"), adr.archived ? "archived" : superseded ? "superseded" : "accepted");
+    console.log(chalk.gray("State:"), adr.archived ? "archived" : adr.superseded ? "superseded" : "accepted");
     console.log(chalk.gray("File:"), adr.file_path);
     console.log(chalk.gray("Created:"), adr.created_at);
     console.log(chalk.gray("Updated:"), adr.updated_at);
@@ -260,4 +255,60 @@ export async function handleAdrArchive(
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+export function registerAdrCommands(
+  program: Command,
+  getContext: () => CommandContext
+): void {
+  const row = getEntityRow("adr");
+  const command = program
+    .command(row.command)
+    .alias(`${row.command}s`)
+    .description(`Manage ${row.pluralLabel}`);
+
+  command
+    .command("create <title>")
+    .description(`Create a new ${row.label}`)
+    .option("-d, --description <desc>", "Decision context, decision, and rationale")
+    .option("--file-path <path>", "File path for markdown")
+    .option("--tags <tags>", "Comma-separated tags")
+    .action(async (title, options) => {
+      await handleAdrCreate(getContext(), title, options);
+    });
+
+  command
+    .command("list")
+    .description(`List ${row.pluralLabel}`)
+    .option("-g, --grep <query>", "Search by title or content")
+    .option("--archived <bool>", "Filter by archive status (true/false)")
+    .option("--limit <num>", "Limit results", "50")
+    .action(async (options) => {
+      await handleAdrList(getContext(), options);
+    });
+
+  command
+    .command("show <id>")
+    .description(`Show ${row.label} details and derived supersession`)
+    .action(async (id) => {
+      await handleAdrShow(getContext(), id);
+    });
+
+  command
+    .command("update <id>")
+    .description(`Update an ${row.label}`)
+    .option("--title <title>", "New title")
+    .option("-d, --description <desc>", "New content")
+    .option("--tags <tags>", "New comma-separated tags")
+    .option("--archived <bool>", "Archive status (true/false)")
+    .action(async (id, options) => {
+      await handleAdrUpdate(getContext(), id, options);
+    });
+
+  command
+    .command("archive <id>")
+    .description(`Archive a withdrawn ${row.label}`)
+    .action(async (id) => {
+      await handleAdrArchive(getContext(), id);
+    });
 }

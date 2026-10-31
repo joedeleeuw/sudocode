@@ -69,6 +69,93 @@ export interface SyncOptions {
   writeBackFrontmatter?: boolean;
 }
 
+type DocumentEntityMap = { spec: Spec; adr: Adr };
+type DocumentEntityType = keyof DocumentEntityMap;
+
+type DocumentEntity = DocumentEntityMap[DocumentEntityType];
+
+interface DocumentSyncCase {
+  get(db: Database.Database, id: string): DocumentEntity | null;
+  getByFilePath(db: Database.Database, filePath: string): DocumentEntity | null;
+  contentChanged(
+    entity: DocumentEntity | null,
+    frontmatter: Record<string, any>,
+    content: string,
+    filePath: string
+  ): boolean;
+  sync(
+    db: Database.Database,
+    id: string,
+    frontmatter: Record<string, any>,
+    content: string,
+    isNew: boolean,
+    updatedAt?: string
+  ): void;
+}
+
+const DOCUMENT_SYNC_CASES = {
+  spec: {
+    get: getSpec,
+    getByFilePath: getSpecByFilePath,
+    contentChanged(entity, frontmatter, content, filePath) {
+      if (entity === null) return true;
+      if (!("priority" in entity)) {
+        throw new Error(`Spec ${entity.id} arrived through the wrong sync case`);
+      }
+      return (
+        entity.title !== frontmatter.title ||
+        entity.content !== content ||
+        entity.file_path !== filePath ||
+        entity.priority !== (frontmatter.priority ?? 2) ||
+        entity.parent_id !== (frontmatter.parent_id || undefined)
+      );
+    },
+    sync(db, id, frontmatter, content, isNew, updatedAt) {
+      const input = {
+        title: frontmatter.title || "Untitled",
+        file_path: frontmatter.file_path || "",
+        content,
+        priority: frontmatter.priority ?? 2,
+        parent_id: frontmatter.parent_id || undefined,
+      };
+      if (isNew) {
+        createSpec(db, { id, ...input, updated_at: updatedAt });
+      } else {
+        updateSpec(db, id, { ...input, updated_at: updatedAt });
+      }
+    },
+  },
+  adr: {
+    get: getAdr,
+    getByFilePath: getAdrByFilePath,
+    contentChanged(entity, frontmatter, content, filePath) {
+      return (
+        entity?.title !== frontmatter.title ||
+        entity?.content !== content ||
+        entity?.file_path !== filePath
+      );
+    },
+    sync(db, id, frontmatter, content, isNew, updatedAt) {
+      const input = {
+        title: frontmatter.title || "Untitled",
+        file_path: frontmatter.file_path || "",
+        content,
+        archived: frontmatter.archived,
+        archived_at: frontmatter.archived_at,
+      };
+      if (isNew) {
+        createAdr(db, { id, ...input, updated_at: updatedAt });
+      } else {
+        updateAdr(db, id, { ...input, updated_at: updatedAt });
+      }
+    },
+  },
+} satisfies Record<DocumentEntityType, DocumentSyncCase>;
+
+function documentSyncCase(entityType: DocumentEntityType): DocumentSyncCase {
+  return DOCUMENT_SYNC_CASES[entityType];
+}
+
 /**
  * Remove internal fields that shouldn't be in markdown frontmatter
  * These fields are only for database tracking, not for the markdown files
@@ -171,13 +258,9 @@ export async function syncMarkdownToJSONL(
     if (entityType !== "issue") {
       data.file_path = filePath;
       if (frontmatterId) {
-        existingById = entityType === "spec"
-          ? getSpec(db, frontmatterId)
-          : getAdr(db, frontmatterId);
+        existingById = documentSyncCase(entityType).get(db, frontmatterId);
       }
-      existingByPath = entityType === "spec"
-        ? getSpecByFilePath(db, filePath)
-        : getAdrByFilePath(db, filePath);
+      existingByPath = documentSyncCase(entityType).getByFilePath(db, filePath);
 
       // Scenario 1: Spec exists with this ID
       if (existingById) {
@@ -395,53 +478,28 @@ async function syncDocument(
   user: string,
   fileModTime?: string
 ): Promise<void> {
-  const oldDocument = isNew
-    ? null
-    : entityType === "spec"
-      ? getSpec(db, id)
-      : getAdr(db, id);
+  const documentCase = documentSyncCase(entityType);
+  const oldDocument = isNew ? null : documentCase.get(db, id);
   const oldContent = oldDocument?.content || "";
-  const title = frontmatter.title || "Untitled";
-  const filePath = frontmatter.file_path || "";
-  const contentChanged =
-    oldDocument?.title !== title ||
-    oldDocument?.content !== content ||
-    oldDocument?.file_path !== filePath ||
-    (entityType === "spec" &&
-      oldDocument &&
-      (("priority" in oldDocument &&
-        oldDocument.priority !== (frontmatter.priority ?? 2)) ||
-        ("parent_id" in oldDocument &&
-          oldDocument.parent_id !== (frontmatter.parent_id || undefined))));
-  const updatedAt = contentChanged && fileModTime ? fileModTime : undefined;
-
-  if (entityType === "adr") {
-    const input = {
-      title,
-      file_path: filePath,
-      content,
-      archived: frontmatter.archived,
-      archived_at: frontmatter.archived_at,
-    };
-    if (isNew) {
-      createAdr(db, { id, ...input, updated_at: fileModTime });
-    } else {
-      updateAdr(db, id, { ...input, updated_at: updatedAt });
-    }
-  } else {
-    const input = {
-      title,
-      file_path: filePath,
-      content,
-      priority: frontmatter.priority ?? 2,
-      parent_id: frontmatter.parent_id || undefined,
-    };
-    if (isNew) {
-      createSpec(db, { id, ...input, updated_at: fileModTime });
-    } else {
-      updateSpec(db, id, { ...input, updated_at: updatedAt });
-    }
-  }
+  const contentChanged = documentCase.contentChanged(
+    oldDocument,
+    frontmatter,
+    content,
+    frontmatter.file_path || ""
+  );
+  const updatedAt = isNew
+    ? fileModTime
+    : contentChanged
+      ? fileModTime
+      : undefined;
+  documentCase.sync(
+    db,
+    id,
+    frontmatter,
+    content,
+    isNew,
+    updatedAt
+  );
 
   if (!isNew && oldContent !== content) {
     const feedbackList = listFeedback(db, { to_id: id });

@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 import type { Adr, ExternalLink } from "@sudocode-ai/types";
+
+export type AdrWithState = Adr & { superseded: boolean };
 import { generateUUID } from "../id-generator.js";
 import { getIncomingRelationships } from "./relationships.js";
 
@@ -127,10 +129,14 @@ function decodeAdr(row: unknown): Adr | null {
   };
 }
 
+function withAdrState(db: Database.Database, adr: Adr): AdrWithState {
+  return { ...adr, superseded: isAdrSuperseded(db, adr.id) };
+}
+
 export function createAdr(
   db: Database.Database,
   input: CreateAdrInput
-): Adr {
+): AdrWithState {
   db.prepare(`
     INSERT INTO adrs (
       id, uuid, title, file_path, content, archived, archived_at,
@@ -167,24 +173,26 @@ export function createAdr(
   return adr;
 }
 
-export function getAdr(db: Database.Database, id: string): Adr | null {
-  return decodeAdr(db.prepare("SELECT * FROM adrs WHERE id = ?").get(id));
+export function getAdr(db: Database.Database, id: string): AdrWithState | null {
+  const adr = decodeAdr(db.prepare("SELECT * FROM adrs WHERE id = ?").get(id));
+  return adr ? withAdrState(db, adr) : null;
 }
 
 export function getAdrByFilePath(
   db: Database.Database,
   filePath: string
-): Adr | null {
-  return decodeAdr(
+): AdrWithState | null {
+  const adr = decodeAdr(
     db.prepare("SELECT * FROM adrs WHERE file_path = ?").get(filePath)
   );
+  return adr ? withAdrState(db, adr) : null;
 }
 
 export function updateAdr(
   db: Database.Database,
   id: string,
   input: UpdateAdrInput
-): Adr {
+): AdrWithState {
   const existing = getAdr(db, id);
   if (!existing) throw new Error(`ADR not found: ${id}`);
 
@@ -240,7 +248,7 @@ export function deleteAdr(db: Database.Database, id: string): boolean {
 export function listAdrs(
   db: Database.Database,
   options: ListAdrsOptions = {}
-): Adr[] {
+): AdrWithState[] {
   const conditions: string[] = [];
   const params: Record<string, number> = {};
   if (options.archived !== undefined) {
@@ -258,14 +266,14 @@ export function listAdrs(
     query += " OFFSET @offset";
     params.offset = options.offset;
   }
-  return db.prepare(query).all(params).map(decodeAdr).filter((adr) => adr !== null);
+  return db.prepare(query).all(params).map(decodeAdr).filter((adr) => adr !== null).map((adr) => withAdrState(db, adr));
 }
 
 export function searchAdrs(
   db: Database.Database,
   query: string,
   options: Omit<ListAdrsOptions, "offset"> = {}
-): Adr[] {
+): AdrWithState[] {
   const conditions = ["(title LIKE @query OR content LIKE @query)"];
   const params: Record<string, string | number> = { query: `%${query}%` };
   if (options.archived !== undefined) {
@@ -275,7 +283,7 @@ export function searchAdrs(
   let sql = `SELECT * FROM adrs WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id ASC`;
   sql += " LIMIT @limit";
   params.limit = options.limit ?? 50;
-  return db.prepare(sql).all(params).map(decodeAdr).filter((adr) => adr !== null);
+  return db.prepare(sql).all(params).map(decodeAdr).filter((adr) => adr !== null).map((adr) => withAdrState(db, adr));
 }
 
 export function isAdrSuperseded(db: Database.Database, id: string): boolean {

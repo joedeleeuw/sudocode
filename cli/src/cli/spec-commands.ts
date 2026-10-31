@@ -6,7 +6,7 @@ import chalk from "chalk";
 import * as path from "path";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
-import { generateSpecId } from "../id-generator.js";
+import { generateEntityId } from "../id-generator.js";
 import {
   createSpec,
   getSpec,
@@ -46,10 +46,7 @@ export async function handleSpecCreate(
   const startTime = Date.now();
   try {
     // Generate spec ID and UUID
-    const { id: specId, uuid: specUUID } = generateSpecId(
-      ctx.db,
-      ctx.outputDir
-    );
+    const { id: specId, uuid: specUUID } = generateEntityId(ctx.db, "spec");
 
     // Ensure specs directory exists
     const specsDir = path.join(ctx.outputDir, "specs");

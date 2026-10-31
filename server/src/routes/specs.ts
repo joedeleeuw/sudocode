@@ -12,7 +12,7 @@ import {
   updateExistingSpec,
   deleteExistingSpec,
 } from "../services/specs.js";
-import { generateSpecId } from "@sudocode-ai/cli/dist/id-generator.js";
+import { generateEntityId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { generateUniqueFilename } from "@sudocode-ai/cli/dist/filename-generator.js";
 import { getSpecFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastSpecUpdate } from "../services/websocket.js";
@@ -127,8 +127,7 @@ export function createSpecsRouter(): Router {
       }
 
       // Generate new spec ID
-      const outputDir = req.project!.sudocodeDir;
-      const { id, uuid } = generateSpecId(req.project!.db, outputDir);
+      const { id, uuid } = generateEntityId(req.project!.db, "spec");
 
       // Generate file path for the spec (relative path)
       const file_path = `specs/${generateUniqueFilename(title, id)}`;

@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import { EntityMentionComponent } from './EntityMentionComponent'
+import { getEntityTypeFromId } from '@sudocode-ai/types/entities'
 
 export interface EntityMentionOptions {
   HTMLAttributes: Record<string, any>
@@ -127,10 +128,7 @@ export const EntityMention = Node.create<EntityMentionOptions>({
       setEntityMention:
         (entityId: string) =>
         ({ commands }) => {
-          // Determine entity type from ID format
-          // Hash format: i-xxxx for issues, s-xxxx for specs
-          // Legacy format: ISSUE-xxx for issues, SPEC-xxx for specs
-          const entityType = (entityId.startsWith('ISSUE-') || entityId.startsWith('i-')) ? 'issue' : 'spec'
+          const entityType = getEntityTypeFromId(entityId)
           return commands.insertContent({
             type: this.name,
             attrs: {

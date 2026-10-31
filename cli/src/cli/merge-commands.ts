@@ -14,11 +14,13 @@ import {
   mergeThreeWay,
   type ResolutionStats,
 } from "../merge-resolver.js";
-import { readJSONL, writeJSONL, type JSONLEntity } from "../jsonl.js";
+import { readJSONL, writeJSONL } from "../jsonl.js";
+import type { JSONLEntity } from "../merge-resolver.js";
 import { importFromJSONL } from "../import.js";
 import { readGitStage } from "../git-merge.js";
 import type { EntityType } from "@sudocode-ai/types";
 import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
+import { resolveIdentityCollisions } from "../identity-collisions.js";
 
 export interface CommandContext {
   db: Database.Database;
@@ -335,38 +337,17 @@ async function resolveFile(
     }
   }
 
-  // Combine all entities that need ID collision checking
   const allEntitiesToCheck = [...cleanConflictEntities, ...resolvedConflicts];
-
-  // Track IDs to detect collisions
-  const idCounts = new Map<string, number>();
-  const processedEntities: JSONLEntity[] = [];
-
-  for (const entity of allEntitiesToCheck) {
-    const currentId = entity.id;
-
-    if (!idCounts.has(currentId)) {
-      // First entity with this ID
-      idCounts.set(currentId, 1);
-      processedEntities.push(entity);
-    } else {
-      // ID collision - rename with suffix
-      const count = idCounts.get(currentId)!;
-      const newEntity = { ...entity } as JSONLEntity;
-      const newId = `${currentId}.${count}`;
-      newEntity.id = newId;
-
-      idCounts.set(currentId, count + 1);
-      processedEntities.push(newEntity);
-
-      conflictStats.conflicts.push({
-        type: 'different-uuids',
-        uuid: entity.uuid,
-        originalIds: [currentId],
-        resolvedIds: [newId],
-        action: `Renamed ID to resolve hash collision (different UUIDs)`,
-      });
-    }
+  const identityResolution = resolveIdentityCollisions(allEntitiesToCheck);
+  const processedEntities = identityResolution.entities;
+  for (const collision of identityResolution.collisions) {
+    conflictStats.conflicts.push({
+      type: 'different-uuids',
+      uuid: collision.uuid,
+      originalIds: [collision.oldId],
+      resolvedIds: [collision.newId],
+      action: `Renamed ${collision.oldId} to ${collision.newId} to resolve an identity collision`,
+    });
   }
 
   // Sort processed entities by created_at before converting to lines
@@ -545,10 +526,10 @@ export async function handleMergeDriver(
   try {
     // Read all three versions
     const baseEntities = fs.existsSync(options.base)
-      ? await readJSONL(options.base, { skipErrors: true })
+      ? await readJSONL<JSONLEntity>(options.base, { skipErrors: true })
       : [];
-    const ourEntities = await readJSONL(options.ours, { skipErrors: true });
-    const theirEntities = await readJSONL(options.theirs, {
+    const ourEntities = await readJSONL<JSONLEntity>(options.ours, { skipErrors: true });
+    const theirEntities = await readJSONL<JSONLEntity>(options.theirs, {
       skipErrors: true,
     });
 

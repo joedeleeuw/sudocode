@@ -1,35 +1,58 @@
 import type Database from "better-sqlite3";
-import type { Adr, EntityType, Issue, Spec } from "@sudocode-ai/types";
-import { getEntityRow } from "@sudocode-ai/types/entities";
-import { getEntityTypeFromId } from "../id-generator.js";
+import type { EntityType } from "@sudocode-ai/types";
+import {
+  getEntityRow,
+  getEntityTypeFromId,
+  type Entity,
+  type EntitySelection,
+} from "@sudocode-ai/types/entities";
 import { getSpec, deleteSpec } from "./specs.js";
 import { getIssue, deleteIssue } from "./issues.js";
 import { getAdr, deleteAdr } from "./adrs.js";
 
-export type Entity = Spec | Issue | Adr;
+type EntityOperationCases = {
+  [K in EntityType]: {
+    get(db: Database.Database, id: string): Entity<K> | null;
+    delete(db: Database.Database, id: string): boolean;
+  };
+};
 
-export function getEntity(
+const ENTITY_OPERATIONS = {
+  spec: { get: getSpec, delete: deleteSpec },
+  issue: { get: getIssue, delete: deleteIssue },
+  adr: { get: getAdr, delete: deleteAdr },
+} satisfies EntityOperationCases;
+
+function getSelectedEntity<K extends EntityType>(
   db: Database.Database,
   id: string,
-  entityType: EntityType
-): Entity | null {
-  switch (entityType) {
-    case "spec":
-      return getSpec(db, id);
-    case "issue":
-      return getIssue(db, id);
-    case "adr":
-      return getAdr(db, id);
-  }
+  operations: EntityOperationCases[K]
+): Entity<K> | null {
+  return operations.get(db, id);
+}
+
+export function getEntity<K extends EntityType>(
+  db: Database.Database,
+  id: string,
+  entityType: K
+): Entity<K> | null {
+  return getSelectedEntity(db, id, ENTITY_OPERATIONS[entityType]);
+}
+
+function selectEntity<K extends EntityType>(
+  entityType: K,
+  entity: Entity<K>
+): EntitySelection<K> {
+  return { entity, entityType };
 }
 
 export function findEntity(
   db: Database.Database,
   id: string
-): { entity: Entity; entityType: EntityType } | null {
+): EntitySelection | null {
   const entityType = getEntityTypeFromId(id);
   const entity = getEntity(db, id, entityType);
-  return entity ? { entity, entityType } : null;
+  return entity ? selectEntity(entityType, entity) : null;
 }
 
 export function getEntityIdentity(
@@ -54,17 +77,18 @@ export function getEntityIdentity(
   return { id: entity.id, uuid: entity.uuid };
 }
 
+function deleteSelectedEntity<K extends EntityType>(
+  db: Database.Database,
+  id: string,
+  operations: EntityOperationCases[K]
+): boolean {
+  return operations.delete(db, id);
+}
+
 export function deleteEntity(
   db: Database.Database,
   id: string,
   entityType: EntityType
 ): boolean {
-  switch (entityType) {
-    case "spec":
-      return deleteSpec(db, id);
-    case "issue":
-      return deleteIssue(db, id);
-    case "adr":
-      return deleteAdr(db, id);
-  }
+  return deleteSelectedEntity(db, id, ENTITY_OPERATIONS[entityType]);
 }

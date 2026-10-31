@@ -1,6 +1,7 @@
 import { NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/core'
 import { EntityBadge } from '@/components/entities'
+import type { EntityType } from '@/types/api'
 
 /**
  * EntityMentionComponent - React component for rendering entity mentions
@@ -16,7 +17,7 @@ import { EntityBadge } from '@/components/entities'
 export function EntityMentionComponent({ node }: NodeViewProps) {
   const { entityId, entityType, displayText, relationshipType } = node.attrs as {
     entityId: string
-    entityType: 'issue' | 'spec'
+    entityType: EntityType
     displayText?: string | null
     relationshipType?: string | null
   }

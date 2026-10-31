@@ -35,7 +35,9 @@ import {
   getToolByName,
   getHandlerType,
 } from "./tool-registry.js";
-import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
+import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
+
+const adrEntityRow = getEntityRow("adr");
 
 export class SudocodeMCPServer {
   private server: Server;
@@ -301,11 +303,11 @@ sudocode is a git-native spec, issue, and ADR management system designed for AI-
         return specTools.showSpec(this.client, args as any);
       case "upsert_spec":
         return specTools.upsertSpec(this.client, args as any);
-      case "list_adrs":
+      case `list_${adrEntityRow.toolStem}s`:
         return adrTools.listAdrs(this.client, adrTools.decodeListAdrsParams(args));
-      case "show_adr":
+      case `show_${adrEntityRow.toolStem}`:
         return adrTools.showAdr(this.client, adrTools.decodeShowAdrParams(args));
-      case "upsert_adr":
+      case `upsert_${adrEntityRow.toolStem}`:
         return adrTools.upsertAdr(this.client, adrTools.decodeUpsertAdrParams(args));
       case "link":
         return relationshipTools.link(this.client, args as any);

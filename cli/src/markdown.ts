@@ -6,7 +6,7 @@ import matter from "gray-matter";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
 import { findEntity } from "./operations/entities.js";
-import { getEntityTypeFromId } from "./id-generator.js";
+import { getEntityTypeFromId } from "@sudocode-ai/types/entities";
 import { createFeedbackAnchor } from "./operations/feedback-anchors.js";
 import type { EntityType, LocationAnchor } from "@sudocode-ai/types";
 

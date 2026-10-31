@@ -13,6 +13,16 @@
  * @param markdown - The raw markdown content
  * @returns Markdown with entity mentions converted to HTML spans
  */
+import {
+  ENTITY_ID_PATTERN_SOURCE,
+  getEntityTypeFromId,
+} from '@sudocode-ai/types/entities'
+
+const entityMentionPattern = new RegExp(
+  `(?<!\\\\)\\[\\[(${ENTITY_ID_PATTERN_SOURCE})(?:\\|([^\\]]+))?\\]\\](?:\\{\\s*([^}]+)\\s*\\})?`,
+  'g'
+)
+
 export function preprocessEntityMentions(markdown: string): string {
   // Match [[ENTITY-ID|displayText]]{ relationshipType } patterns
   // Uses negative lookbehind to skip escaped brackets (\[\[)
@@ -21,12 +31,9 @@ export function preprocessEntityMentions(markdown: string): string {
   // 2. displayText (optional): text after |
   // 3. relationshipType (optional): text inside { }
   return markdown.replace(
-    /(?<!\\)\[\[((?:[is]-[0-9a-z]{4,8})|(?:[A-Z]+-\d+))(?:\|([^\]]+))?\]\](?:\{\s*([^}]+)\s*\})?/g,
+    entityMentionPattern,
     (_match, entityId, displayText, relationshipType) => {
-      // Determine entity type from ID format
-      // Hash format: i-xxxx for issues, s-xxxx for specs
-      // Legacy format: ISSUE-xxx for issues, SPEC-xxx for specs
-      const entityType = (entityId.startsWith('ISSUE-') || entityId.startsWith('i-')) ? 'issue' : 'spec'
+      const entityType = getEntityTypeFromId(entityId)
 
       // Trim whitespace from captured groups
       const trimmedDisplayText = displayText?.trim()

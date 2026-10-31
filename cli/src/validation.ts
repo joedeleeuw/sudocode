@@ -3,6 +3,7 @@
  */
 
 import type { RelationshipType, IssueStatus, FeedbackType } from "./types.js";
+import { InputError } from "@sudocode-ai/types/errors";
 
 /**
  * Valid relationship type values for runtime validation.
@@ -30,19 +31,18 @@ export function getValidRelationshipTypes(): string[] {
   return Array.from(VALID_RELATIONSHIP_TYPES);
 }
 
-export function parseRelationshipType(value: unknown): RelationshipType {
-  if (typeof value !== "string") {
-    throw new Error(`Relationship type must be a string; received ${typeof value}`);
-  }
-  const relationshipType = Array.from(VALID_RELATIONSHIP_TYPES).find(
-    (candidate) => candidate === value
-  );
-  if (!relationshipType) {
-    throw new Error(
-      `Invalid relationship type: ${value}. Valid types: ${getValidRelationshipTypes().join(", ")}`
+export function parseRelationshipType(
+  value: unknown,
+  field = "relationship_type"
+): RelationshipType {
+  if (typeof value !== "string" || !isValidRelationshipType(value)) {
+    throw new InputError(
+      field,
+      `Invalid relationship type ${String(value)}`,
+      getValidRelationshipTypes()
     );
   }
-  return relationshipType;
+  return value;
 }
 
 /**

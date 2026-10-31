@@ -28,7 +28,7 @@ import {
 } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { createIssue } from "@sudocode-ai/cli/dist/operations/issues.js";
 import { createFeedback } from "@sudocode-ai/cli/dist/operations/feedback.js";
-import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
+import { generateEntityId } from "@sudocode-ai/cli/dist/id-generator.js";
 import type { ExternalComment } from "@sudocode-ai/types";
 import { triggerExport, syncEntityToMarkdown } from "../services/export.js";
 import { broadcastSpecUpdate } from "../services/websocket.js";
@@ -1122,7 +1122,7 @@ export function createImportRouter(): Router {
             // Create a placeholder issue to serve as the feedback source
             // TODO: Support feedback without an issue.
             const { id: placeholderIssueId, uuid: placeholderIssueUuid } =
-              generateIssueId(req.project!.db, req.project!.sudocodeDir);
+              generateEntityId(req.project!.db, "issue");
 
             const placeholderIssue = createIssue(req.project!.db, {
               id: placeholderIssueId,

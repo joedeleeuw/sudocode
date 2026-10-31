@@ -4,8 +4,8 @@
 
 import * as crypto from "crypto";
 import type Database from "better-sqlite3";
-import type { IssueFeedback, FeedbackType, FeedbackAnchor } from "../types.js";
-import { getEntityTypeFromId } from "../id-generator.js";
+import type { EntityType, FeedbackJSONL, IssueFeedback, FeedbackType, FeedbackAnchor } from "../types.js";
+import { getEntityTypeFromId } from "@sudocode-ai/types/entities";
 import { getEntityRow } from "@sudocode-ai/types/entities";
 import { getEntityIdentity } from "./entities.js";
 
@@ -289,6 +289,40 @@ export function getFeedbackForTarget(
   to_id: string
 ): IssueFeedback[] {
   return listFeedback(db, { to_id });
+}
+
+export function listSnapshotFeedback(
+  db: Database.Database,
+  entityId: string,
+  entityType: EntityType
+): IssueFeedback[] {
+  const query = entityType === "issue"
+    ? `SELECT * FROM issue_feedback
+       WHERE from_id = @entityId OR (from_id IS NULL AND to_id = @entityId)
+       ORDER BY created_at DESC, id ASC`
+    : `SELECT * FROM issue_feedback
+       WHERE from_id IS NULL AND to_id = @entityId
+       ORDER BY created_at DESC, id ASC`;
+  const rows = db.prepare(query).all({ entityId });
+  return rows.map(convertDbRowToFeedback);
+}
+
+export function feedbackToJSONL(feedback: IssueFeedback): FeedbackJSONL {
+  return {
+    id: feedback.id,
+    from_id: feedback.from_id,
+    to_id: feedback.to_id,
+    feedback_type: feedback.feedback_type,
+    content: feedback.content,
+    agent: feedback.agent,
+    anchor:
+      feedback.anchor && typeof feedback.anchor === "string"
+        ? JSON.parse(feedback.anchor)
+        : feedback.anchor,
+    dismissed: feedback.dismissed,
+    created_at: feedback.created_at,
+    updated_at: feedback.updated_at,
+  };
 }
 
 /**

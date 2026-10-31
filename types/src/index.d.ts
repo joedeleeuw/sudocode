@@ -228,11 +228,13 @@ export type FeedbackType = "comment" | "suggestion" | "request";
 export interface SpecJSONL extends Spec {
   relationships: RelationshipJSONL[];
   tags: string[];
+  feedback?: FeedbackJSONL[];
 }
 
 export interface AdrJSONL extends Adr {
   relationships: RelationshipJSONL[];
   tags: string[];
+  feedback?: FeedbackJSONL[];
 }
 
 export interface IssueJSONL extends Issue {

@@ -4,8 +4,20 @@
 
 import type Database from "better-sqlite3";
 import type { AdrJSONL, EntityType, RelationshipJSONL, SpecJSONL, IssueJSONL } from "@sudocode-ai/types";
-import { getEntityRow } from "@sudocode-ai/types/entities";
-import { readJSONL } from "./jsonl.js";
+import {
+  ENTITY_ROWS,
+  getEntityRow,
+  type Entity,
+  type EntitySnapshot,
+  type EntitySnapshots,
+} from "@sudocode-ai/types/entities";
+import { readPersistedSnapshot } from "./snapshot.js";
+import {
+  remapIdentityReferences,
+  resolveIdentityCollisions,
+  type IdentityCollision,
+  type IdentityRename,
+} from "./identity-collisions.js";
 import {
   listSpecs,
   createSpec,
@@ -20,7 +32,6 @@ import {
   deleteAdr,
   getAdr,
 } from "./operations/adrs.js";
-import { getEntity } from "./operations/entities.js";
 import { findExistingEntityFile } from "./filename-generator.js";
 import {
   listIssues,
@@ -31,15 +42,11 @@ import {
 } from "./operations/issues.js";
 import {
   addRelationship,
-  removeAllRelationships,
+  EntityNotFoundError,
   removeOutgoingRelationships,
 } from "./operations/relationships.js";
 import { setTags } from "./operations/tags.js";
-import {
-  createFeedback,
-  listFeedback,
-  deleteFeedback,
-} from "./operations/feedback.js";
+import { createFeedback } from "./operations/feedback.js";
 import { transaction } from "./operations/transactions.js";
 import * as path from "path";
 import * as fs from "fs";
@@ -131,8 +138,9 @@ export interface ChangeDetection {
  * Uses UUID as the source of truth for entity identity
  */
 export function detectChanges<
-  T extends { id: string; uuid: string; updated_at: string },
->(existing: T[], incoming: T[], forceUpdateIds: string[] = []): ChangeDetection {
+  Existing extends { id: string; uuid: string; updated_at: string },
+  Incoming extends { id: string; uuid: string; updated_at: string },
+>(existing: Existing[], incoming: Incoming[], forceUpdateIds: string[] = []): ChangeDetection {
   // Map by UUID (the true identity)
   const existingByUUID = new Map(existing.map((e) => [e.uuid, e]));
   const incomingUUIDs = new Set(incoming.map((e) => e.uuid));
@@ -167,9 +175,9 @@ export function detectChanges<
 /**
  * Check if an entity has changed
  */
-function hasChanged<T extends { updated_at: string }>(
-  existing: T,
-  incoming: T
+function hasChanged(
+  existing: { updated_at: string },
+  incoming: { updated_at: string }
 ): boolean {
   // Simple comparison based on updated_at timestamp
   return existing.updated_at !== incoming.updated_at;
@@ -180,8 +188,9 @@ function hasChanged<T extends { updated_at: string }>(
  * UUIDs are the source of truth for entity identity
  */
 export function detectCollisions<
-  T extends { id: string; uuid: string; title: string; created_at: string },
->(existing: T[], incoming: T[]): CollisionInfo[] {
+  Existing extends { id: string; uuid: string; title?: string; created_at: string },
+  Incoming extends { id: string; uuid: string; title: string; created_at: string },
+>(existing: Existing[], incoming: Incoming[]): CollisionInfo[] {
   const collisions: CollisionInfo[] = [];
   const existingMap = new Map(existing.map((e) => [e.id, e]));
 
@@ -195,7 +204,7 @@ export function detectCollisions<
         uuid: inc.uuid, // UUID of the incoming entity
         type: "spec", // Will be set correctly by caller
         reason: "Same ID but different UUID (different entities)",
-        localContent: ex.title,
+        localContent: ex.title ?? "",
         incomingContent: inc.title,
         localCreatedAt: ex.created_at,
         incomingCreatedAt: inc.created_at,
@@ -204,7 +213,7 @@ export function detectCollisions<
   }
 
   // Second, detect collisions within incoming data itself (duplicates)
-  const incomingByID = new Map<string, T[]>();
+  const incomingByID = new Map<string, Incoming[]>();
   for (const inc of incoming) {
     const existing = incomingByID.get(inc.id) || [];
     existing.push(inc);
@@ -269,103 +278,6 @@ export function countReferences(
   return count;
 }
 
-/**
- * Resolve collisions using timestamp-based deterministic strategy
- *
- * The entity with the NEWER (more recent) created_at timestamp logically
- * should be renumbered, while the OLDER entity keeps the original ID.
- *
- * For practical reasons (entities already in DB can't be easily renamed),
- * incoming entities are always the ones that get new IDs. However, we
- * deterministically decide which UUID gets which new ID based on timestamps.
- */
-export function resolveCollisions(
-  db: Database.Database,
-  collisions: CollisionInfo[]
-): CollisionInfo[] {
-  const resolved: CollisionInfo[] = [];
-  const uuidToNewId = new Map<string, string>();
-
-  for (const collision of collisions) {
-    // Determine which entity is newer based on created_at timestamps
-    let incomingIsNewer = true;
-
-    if (collision.localCreatedAt) {
-      const localTime = new Date(collision.localCreatedAt).getTime();
-      const incomingTime = new Date(collision.incomingCreatedAt).getTime();
-
-      // Check which is newer
-      if (incomingTime > localTime) {
-        incomingIsNewer = true; // Incoming is newer
-      } else if (localTime > incomingTime) {
-        incomingIsNewer = false; // Local is newer
-      } else {
-        // Same timestamp - use UUID comparison for determinism
-        incomingIsNewer = collision.uuid > collision.localContent;
-      }
-    }
-
-    // Generate deterministic new ID
-    // Always renumber the incoming entity (practical constraint)
-    // But ensure same UUID always gets same new ID across runs
-    let newId = uuidToNewId.get(collision.uuid);
-    if (!newId) {
-      newId = generateNewId(db, collision.id, collision.type);
-      uuidToNewId.set(collision.uuid, newId);
-    }
-
-    resolved.push({
-      ...collision,
-      resolution: "renumber", // Incoming always gets renumbered
-      newId,
-      // Track which one was logically newer (for logging/debugging)
-      ...(incomingIsNewer && {
-        note: "incoming is newer - correctly renumbered",
-      }),
-      ...(!incomingIsNewer && {
-        note: "local is newer - incoming (older) being renumbered",
-      }),
-    });
-  }
-
-  return resolved;
-}
-
-/**
- * Generate a new unique ID
- */
-function generateNewId(
-  db: Database.Database,
-  oldId: string,
-  type: EntityType
-): string {
-  // Extract prefix and number
-  const match = oldId.match(/^([a-z]+-)?(\d+)$/i);
-  if (!match) {
-    // Use timestamp-based ID
-    return `${type}-${Date.now()}`;
-  }
-
-  const prefix = match[1] || `${type}-`;
-  let num = parseInt(match[2], 10);
-
-  // Find next available ID
-  let newId = `${prefix}${num + 1000}`;
-  let attempts = 0;
-
-  while (attempts < 1000) {
-    if (!getEntity(db, newId, type)) {
-      return newId;
-    }
-
-    num++;
-    newId = `${prefix}${num + 1000}`;
-    attempts++;
-  }
-
-  // Fallback to timestamp
-  return `${prefix}${Date.now()}`;
-}
 
 /**
  * Update text references when an ID is renumbered
@@ -420,8 +332,7 @@ export function importSpecs(
   db: Database.Database,
   specs: SpecJSONL[],
   changes: ChangeDetection,
-  dryRun: boolean = false,
-  skipRelationships: boolean = false
+  dryRun: boolean = false
 ): { added: number; updated: number; deleted: number } {
   if (dryRun) {
     return {
@@ -479,26 +390,6 @@ export function importSpecs(
     });
   }
 
-  // Add relationships
-  if (!skipRelationships) {
-    for (const id of changes.added) {
-      const spec = specs.find((s) => s.id === id);
-      if (spec) {
-        if (spec.relationships && spec.relationships.length > 0) {
-          for (const rel of spec.relationships) {
-            addRelationship(db, {
-              from_id: rel.from,
-              from_type: rel.from_type,
-              to_id: rel.to,
-              to_type: rel.to_type,
-              relationship_type: rel.type,
-            });
-          }
-        }
-      }
-    }
-  }
-
   // Update existing specs
   for (const id of changes.updated) {
     const spec = specs.find((s) => s.id === id);
@@ -523,25 +414,6 @@ export function importSpecs(
     }
   }
 
-  // Update relationships (only remove outgoing to preserve incoming relationships)
-  if (!skipRelationships) {
-    for (const id of changes.updated) {
-      const spec = specs.find((s) => s.id === id);
-      if (spec) {
-        removeOutgoingRelationships(db, spec.id, "spec");
-        for (const rel of spec.relationships || []) {
-          addRelationship(db, {
-            from_id: rel.from,
-            from_type: rel.from_type,
-            to_id: rel.to,
-            to_type: rel.to_type,
-            relationship_type: rel.type,
-          });
-        }
-      }
-    }
-  }
-
   // Delete removed specs
   for (const id of changes.deleted) {
     deleteSpec(db, id);
@@ -555,8 +427,7 @@ export function importAdrs(
   db: Database.Database,
   adrs: AdrJSONL[],
   changes: ChangeDetection,
-  dryRun: boolean = false,
-  skipRelationships: boolean = false
+  dryRun: boolean = false
 ): { added: number; updated: number; deleted: number } {
   if (dryRun) {
     return {
@@ -588,17 +459,6 @@ export function importAdrs(
     });
     setTags(db, adr.id, "adr", adr.tags);
     added++;
-    if (!skipRelationships) {
-      for (const rel of adr.relationships) {
-        addRelationship(db, {
-          from_id: rel.from,
-          from_type: rel.from_type,
-          to_id: rel.to,
-          to_type: rel.to_type,
-          relationship_type: rel.type,
-        });
-      }
-    }
   }
 
   for (const id of changes.updated) {
@@ -617,18 +477,6 @@ export function importAdrs(
     });
     setTags(db, id, "adr", adr.tags);
     updated++;
-    if (!skipRelationships) {
-      removeOutgoingRelationships(db, id, "adr");
-      for (const rel of adr.relationships) {
-        addRelationship(db, {
-          from_id: rel.from,
-          from_type: rel.from_type,
-          to_id: rel.to,
-          to_type: rel.to_type,
-          relationship_type: rel.type,
-        });
-      }
-    }
   }
 
   for (const id of changes.deleted) {
@@ -639,59 +487,13 @@ export function importAdrs(
 }
 
 /**
- * Sync feedback for an issue from JSONL data
- */
-function syncIssueFeedback(
-  db: Database.Database,
-  issueId: string,
-  feedbackJSONL: IssueJSONL["feedback"]
-): void {
-  // Delete all existing feedback for this issue
-  const existingFeedback = listFeedback(db, { from_id: issueId });
-  for (const fb of existingFeedback) {
-    deleteFeedback(db, fb.id);
-  }
-
-  // Create new feedback from JSONL
-  if (feedbackJSONL && feedbackJSONL.length > 0) {
-    for (const fb of feedbackJSONL) {
-      // Support legacy JSONL format (issue_id/spec_id) for backward compatibility
-      const fromId = (fb as any).from_id || (fb as any).issue_id;
-      const toId = (fb as any).to_id || (fb as any).spec_id;
-
-      // to_id is required, but from_id is optional (external feedback)
-      if (!toId) {
-        console.warn(
-          `Skipping feedback ${fb.id}: missing to_id or spec_id`
-        );
-        continue;
-      }
-
-      createFeedback(db, {
-        id: fb.id,
-        from_id: fromId, // Can be undefined for anonymous feedback
-        to_id: toId,
-        feedback_type: fb.feedback_type,
-        content: fb.content,
-        agent: fb.agent,
-        anchor: fb.anchor,
-        dismissed: fb.dismissed,
-        created_at: fb.created_at,
-        updated_at: fb.updated_at,
-      });
-    }
-  }
-}
-
-/**
  * Import issues from JSONL
  */
 export function importIssues(
   db: Database.Database,
   issues: IssueJSONL[],
   changes: ChangeDetection,
-  dryRun: boolean = false,
-  skipRelationships: boolean = false
+  dryRun: boolean = false
 ): { added: number; updated: number; deleted: number } {
   if (dryRun) {
     return {
@@ -749,24 +551,6 @@ export function importIssues(
     });
   }
 
-  // Add relationships
-  if (!skipRelationships) {
-    for (const id of changes.added) {
-      const issue = issues.find((i) => i.id === id);
-      if (issue) {
-        for (const rel of issue.relationships || []) {
-          addRelationship(db, {
-            from_id: rel.from,
-            from_type: rel.from_type,
-            to_id: rel.to,
-            to_type: rel.to_type,
-            relationship_type: rel.type,
-          });
-        }
-      }
-    }
-  }
-
   // Update existing issues
   for (const id of changes.updated) {
     const issue = issues.find((i) => i.id === id);
@@ -793,216 +577,126 @@ export function importIssues(
     }
   }
 
-  // Update relationships (only remove outgoing to preserve incoming relationships)
-  if (!skipRelationships) {
-    for (const id of changes.updated) {
-      const issue = issues.find((i) => i.id === id);
-      if (issue) {
-        removeOutgoingRelationships(db, issue.id, "issue");
-        for (const rel of issue.relationships || []) {
-          addRelationship(db, {
-            from_id: rel.from,
-            from_type: rel.from_type,
-            to_id: rel.to,
-            to_type: rel.to_type,
-            relationship_type: rel.type,
-          });
-        }
-      }
-    }
-  }
-
   // Delete removed issues
   for (const id of changes.deleted) {
     deleteIssue(db, id);
     deleted++;
   }
-
-  // Sync feedback after all issues/specs are created/updated
-  // This ensures that feedback references to other issues are valid
-  for (const id of [...changes.added, ...changes.updated]) {
-    const issue = issues.find((i) => i.id === id);
-    if (issue) {
-      syncIssueFeedback(db, issue.id, issue.feedback);
-    }
-  }
-
   return { added, updated, deleted };
 }
 
-/**
- * Import specs, issues, and ADRs from JSONL files
- */
-export async function importFromJSONL(
-  db: Database.Database,
-  options: ImportOptions = {}
-): Promise<ImportResult> {
-  const {
-    inputDir = ".sudocode",
-    specsFile = getEntityRow("spec").jsonlFile,
-    issuesFile = getEntityRow("issue").jsonlFile,
-    adrsFile = getEntityRow("adr").jsonlFile,
-    dryRun = false,
-    resolveCollisions: shouldResolve = true,
-    forceUpdateIds = [],
-  } = options;
+interface ImportCounts {
+  added: number;
+  updated: number;
+  deleted: number;
+}
 
-  // Check if markdown is source of truth
-  const config = getConfig(inputDir);
-  if (isMarkdownFirst(config)) {
-    // In markdown-first mode, JSONL is derived, not authoritative
-    // Warn but still allow import (useful for initial setup or recovery)
-    console.warn(
-      "[import] Warning: Markdown is configured as source of truth (sourceOfTruth = 'markdown')."
-    );
-    console.warn(
-      "[import] JSONL import may override changes. Consider using 'sudocode sync --from-markdown' instead."
-    );
-  }
+interface EntityImportCase<K extends EntityType> {
+  list(db: Database.Database): Entity<K>[];
+  import(
+    db: Database.Database,
+    entities: EntitySnapshot<K>[],
+    changes: ChangeDetection,
+    dryRun: boolean
+  ): ImportCounts;
+  deletedMarkdownPath(db: Database.Database, inputDir: string, id: string): string | null;
+}
 
-  const specsPath = path.join(inputDir, specsFile);
-  const issuesPath = path.join(inputDir, issuesFile);
-  const adrsPath = path.join(inputDir, adrsFile);
-
-  const incomingSpecs = await readJSONL<SpecJSONL>(specsPath, {
-    skipErrors: true,
-  });
-  const incomingIssues = await readJSONL<IssueJSONL>(issuesPath, {
-    skipErrors: true,
-  });
-  const incomingAdrs = await readJSONL<AdrJSONL>(adrsPath, {
-    skipErrors: true,
-  });
-
-  const existingSpecs = listSpecs(db);
-  const existingIssues = listIssues(db);
-  const existingAdrs = listAdrs(db);
-
-  const specCollisions = detectCollisions(existingSpecs, incomingSpecs);
-  const issueCollisions = detectCollisions(existingIssues, incomingIssues);
-  const adrCollisions = detectCollisions(existingAdrs, incomingAdrs);
-
-  const allCollisions = [
-    ...specCollisions.map((c) => ({ ...c, type: "spec" as const })),
-    ...issueCollisions.map((c) => ({ ...c, type: "issue" as const })),
-    ...adrCollisions.map((c) => ({ ...c, type: "adr" as const })),
-  ];
-
-  // Resolve collisions if requested
-  let resolvedCollisions: CollisionInfo[] = [];
-  if (shouldResolve && allCollisions.length > 0) {
-    resolvedCollisions = resolveCollisions(db, allCollisions);
-
-    // Modify incoming data to use new IDs for colliding entities
-    // Use UUID to identify the correct entity to rename (in case of duplicate IDs)
-    for (const collision of resolvedCollisions) {
-      if (collision.resolution === "renumber" && collision.newId) {
-        const oldId = collision.id;
-        const newId = collision.newId;
-
-        if (collision.type === "spec") {
-          const spec = incomingSpecs.find(
-            (s) => s.id === oldId && s.uuid === collision.uuid
-          );
-          if (spec) {
-            spec.id = newId;
-          }
-
-          // Update feedback references to this spec (to_id)
-          for (const issue of incomingIssues) {
-            if (issue.feedback) {
-              for (const fb of issue.feedback) {
-                const feedbackToId = (fb as any).to_id || (fb as any).spec_id;
-                if (feedbackToId === oldId) {
-                  // Update both old and new field names for safety
-                  if ((fb as any).to_id) (fb as any).to_id = newId;
-                  if ((fb as any).spec_id) (fb as any).spec_id = newId;
-                }
-              }
-            }
-          }
-        } else if (collision.type === "adr") {
-          const adr = incomingAdrs.find(
-            (candidate) => candidate.id === oldId && candidate.uuid === collision.uuid
-          );
-          if (adr) adr.id = newId;
-        } else if (collision.type === "issue") {
-          const issue = incomingIssues.find(
-            (i) => i.id === oldId && i.uuid === collision.uuid
-          );
-          if (issue) {
-            issue.id = newId;
-
-            // Update feedback within this issue (from_id)
-            if (issue.feedback) {
-              for (const fb of issue.feedback) {
-                // Update both old and new field names for safety
-                if ((fb as any).from_id) (fb as any).from_id = newId;
-                if ((fb as any).issue_id) (fb as any).issue_id = newId;
-              }
-            }
-          }
-
-          // Update feedback references FROM this issue in other issues' feedback
-          for (const otherIssue of incomingIssues) {
-            if (otherIssue.feedback) {
-              for (const fb of otherIssue.feedback) {
-                const feedbackFromId =
-                  (fb as any).from_id || (fb as any).issue_id;
-                if (feedbackFromId === oldId) {
-                  // Update both old and new field names for safety
-                  if ((fb as any).from_id) (fb as any).from_id = newId;
-                  if ((fb as any).issue_id) (fb as any).issue_id = newId;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Detect changes (after collision resolution has modified incoming data)
-  const specChanges = detectChanges(existingSpecs, incomingSpecs, forceUpdateIds);
-  const issueChanges = detectChanges(existingIssues, incomingIssues, forceUpdateIds);
-  const adrChanges = detectChanges(existingAdrs, incomingAdrs, forceUpdateIds);
-
-  // Collect markdown file paths for entities to be deleted (before deletion)
-  // We need to do this before the transaction because the entities will be gone after
-  const markdownFilesToDelete: string[] = [];
-  if (!dryRun) {
-    // Collect spec file paths
-    for (const id of specChanges.deleted) {
+const IMPORT_CASES = {
+  spec: {
+    list: listSpecs,
+    import: importSpecs,
+    deletedMarkdownPath(db, inputDir, id) {
       const spec = getSpec(db, id);
-      if (spec && spec.file_path) {
-        markdownFilesToDelete.push(path.join(inputDir, spec.file_path));
-      }
-    }
-    // Collect issue file paths
-    for (const id of issueChanges.deleted) {
-      const issuesDir = path.join(inputDir, getEntityRow("issue").markdownDir);
-      const existing = findExistingEntityFile(id, issuesDir);
-      if (existing) {
-        markdownFilesToDelete.push(existing);
-      }
-    }
-    for (const id of adrChanges.deleted) {
+      return spec ? path.join(inputDir, spec.file_path) : null;
+    },
+  },
+  issue: {
+    list: listIssues,
+    import: importIssues,
+    deletedMarkdownPath(_db, inputDir, id) {
+      return findExistingEntityFile(
+        id,
+        path.join(inputDir, getEntityRow("issue").markdownDir)
+      );
+    },
+  },
+  adr: {
+    list: listAdrs,
+    import: importAdrs,
+    deletedMarkdownPath(db, inputDir, id) {
       const adr = getAdr(db, id);
-      if (adr) markdownFilesToDelete.push(path.join(inputDir, adr.file_path));
+      return adr ? path.join(inputDir, adr.file_path) : null;
+    },
+  },
+} satisfies { [K in EntityType]: EntityImportCase<K> };
+
+type ExistingEntities = { [K in EntityType]: Entity<K>[] };
+type ChangeMap = Record<EntityType, ChangeDetection>;
+type CountMap = Record<EntityType, ImportCounts>;
+
+function existingEntitySnapshot(db: Database.Database): ExistingEntities {
+  return {
+    spec: IMPORT_CASES.spec.list(db),
+    issue: IMPORT_CASES.issue.list(db),
+    adr: IMPORT_CASES.adr.list(db),
+  };
+}
+
+function applySnapshotRenames(snapshot: EntitySnapshots, renames: IdentityRename[]): void {
+  for (const row of ENTITY_ROWS) {
+    snapshot[row.type] = remapIdentityReferences(snapshot[row.type], renames);
+  }
+}
+
+function toCollisionInfo(collision: IdentityCollision): CollisionInfo {
+  return {
+    id: collision.oldId,
+    uuid: collision.uuid,
+    type: collision.entityType,
+    reason: collision.reason,
+    localContent: collision.localTitle ?? "",
+    incomingContent: collision.incomingTitle ?? "",
+    localCreatedAt: collision.localCreatedAt,
+    incomingCreatedAt: collision.incomingCreatedAt ?? "",
+    resolution: "renumber",
+    newId: collision.newId,
+  };
+}
+
+function collectMarkdownDeletions(
+  db: Database.Database,
+  inputDir: string,
+  changes: ChangeMap
+): string[] {
+  const files: string[] = [];
+  for (const row of ENTITY_ROWS) {
+    for (const id of changes[row.type].deleted) {
+      const filePath = IMPORT_CASES[row.type].deletedMarkdownPath(db, inputDir, id);
+      if (filePath) files.push(filePath);
     }
   }
+  return files;
+}
 
-  // Apply changes in transaction
-  const result: ImportResult = {
-    specs: { added: 0, updated: 0, deleted: 0 },
-    issues: { added: 0, updated: 0, deleted: 0 },
-    adrs: { added: 0, updated: 0, deleted: 0 },
-    collisions:
-      resolvedCollisions.length > 0 ? resolvedCollisions : allCollisions,
-    warnings: [],
-  };
+function importSnapshotFeedback(db: Database.Database, snapshot: EntitySnapshots): void {
+  db.prepare("DELETE FROM issue_feedback").run();
+  for (const row of ENTITY_ROWS) {
+    for (const entity of snapshot[row.type]) {
+      for (const feedback of entity.feedback ?? []) {
+        createFeedback(db, feedback);
+      }
+    }
+  }
+}
 
-  // Helper to try adding a relationship, collecting warnings for missing entities
+function importCaseRelationships(
+  db: Database.Database,
+  entityType: EntityType,
+  entities: EntitySnapshot[],
+  caseChanges: ChangeDetection,
+  warnings: ImportWarning[]
+): void {
   const tryAddRelationship = (
     rel: RelationshipJSONL,
     sourceEntityId: string
@@ -1015,96 +709,159 @@ export async function importFromJSONL(
         to_type: rel.to_type,
         relationship_type: rel.type,
       });
-    } catch (error: any) {
-      // Check if this is a "not found" error for missing entities
-      const message = error?.message || String(error);
-      if (message.includes("not found:")) {
-        result.warnings!.push({
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) {
+        warnings.push({
           type: "missing_entity",
-          message: `Skipping relationship: ${message}`,
+          message: `Skipping relationship: ${error.message}`,
           entityId: sourceEntityId,
           relationshipFrom: rel.from,
           relationshipTo: rel.to,
         });
-      } else {
-        // Re-throw other errors
-        throw error;
+        return;
       }
+      throw error;
     }
   };
+  for (const id of caseChanges.added) {
+    const entity = entities.find((candidate) => candidate.id === id);
+    for (const relationship of entity?.relationships ?? []) {
+      tryAddRelationship(relationship, id);
+    }
+  }
+  for (const id of caseChanges.updated) {
+    const entity = entities.find((candidate) => candidate.id === id);
+    if (!entity) continue;
+    removeOutgoingRelationships(db, id, entityType);
+    for (const relationship of entity.relationships) {
+      tryAddRelationship(relationship, id);
+    }
+  }
+}
 
-  if (!dryRun) {
+/**
+ * Import specs, issues, and ADRs from JSONL files
+ */
+export async function importFromJSONL(
+  db: Database.Database,
+  options: ImportOptions = {}
+): Promise<ImportResult> {
+  const {
+    inputDir = ".sudocode",
+    specsFile,
+    issuesFile,
+    adrsFile,
+    dryRun = false,
+    resolveCollisions: shouldResolve = true,
+    forceUpdateIds = [],
+  } = options;
+
+  const config = getConfig(inputDir);
+  if (isMarkdownFirst(config)) {
+    console.warn(
+      "[import] Warning: Markdown is configured as source of truth (sourceOfTruth = 'markdown')."
+    );
+    console.warn(
+      "[import] JSONL import may override changes. Consider using 'sudocode sync --from-markdown' instead."
+    );
+  }
+
+  const snapshot = readPersistedSnapshot(inputDir, {
+    spec: specsFile,
+    issue: issuesFile,
+    adr: adrsFile,
+  });
+  const existing = existingEntitySnapshot(db);
+  const specCollisions: CollisionInfo[] = detectCollisions(existing.spec, snapshot.spec).map(
+    (collision) => ({ ...collision, type: "spec" })
+  );
+  const issueCollisions: CollisionInfo[] = detectCollisions(existing.issue, snapshot.issue).map(
+    (collision) => ({ ...collision, type: "issue" })
+  );
+  const adrCollisions: CollisionInfo[] = detectCollisions(existing.adr, snapshot.adr).map(
+    (collision) => ({ ...collision, type: "adr" })
+  );
+  const detectedCollisions = [
+    ...specCollisions,
+    ...issueCollisions,
+    ...adrCollisions,
+  ];
+  let resolvedCollisions: CollisionInfo[] = detectedCollisions;
+
+  if (shouldResolve) {
+    const specResolution = resolveIdentityCollisions(snapshot.spec, existing.spec);
+    const issueResolution = resolveIdentityCollisions(snapshot.issue, existing.issue);
+    const adrResolution = resolveIdentityCollisions(snapshot.adr, existing.adr);
+    snapshot.spec = specResolution.entities;
+    snapshot.issue = issueResolution.entities;
+    snapshot.adr = adrResolution.entities;
+    const renames = [
+      ...specResolution.renames,
+      ...issueResolution.renames,
+      ...adrResolution.renames,
+    ];
+    const collisions = [
+      ...specResolution.collisions,
+      ...issueResolution.collisions,
+      ...adrResolution.collisions,
+    ];
+    applySnapshotRenames(snapshot, renames);
+    resolvedCollisions = collisions.map(toCollisionInfo);
+  }
+
+  const changes: ChangeMap = {
+    spec: detectChanges(existing.spec, snapshot.spec, forceUpdateIds),
+    issue: detectChanges(existing.issue, snapshot.issue, forceUpdateIds),
+    adr: detectChanges(existing.adr, snapshot.adr, forceUpdateIds),
+  };
+  const counts: CountMap = {
+    spec: { added: 0, updated: 0, deleted: 0 },
+    issue: { added: 0, updated: 0, deleted: 0 },
+    adr: { added: 0, updated: 0, deleted: 0 },
+  };
+  const markdownFilesToDelete = dryRun ? [] : collectMarkdownDeletions(db, inputDir, changes);
+  const warnings: ImportWarning[] = [];
+
+  if (dryRun) {
+    counts.spec = IMPORT_CASES.spec.import(db, snapshot.spec, changes.spec, true);
+    counts.issue = IMPORT_CASES.issue.import(db, snapshot.issue, changes.issue, true);
+    counts.adr = IMPORT_CASES.adr.import(db, snapshot.adr, changes.adr, true);
+  } else {
     transaction(db, () => {
-      // First pass: Import all entities without relationships
-      result.specs = importSpecs(db, incomingSpecs, specChanges, dryRun, true);
-      result.issues = importIssues(
-        db,
-        incomingIssues,
-        issueChanges,
-        dryRun,
-        true
-      );
-
-      result.adrs = importAdrs(db, incomingAdrs, adrChanges, dryRun, true);
-
-      const relationshipImports: Array<{
-        entityType: EntityType;
-        changes: ChangeDetection;
-        entities: Array<{ id: string; relationships: RelationshipJSONL[] }>;
-      }> = [
-        { entityType: "spec", changes: specChanges, entities: incomingSpecs },
-        { entityType: "issue", changes: issueChanges, entities: incomingIssues },
-        { entityType: "adr", changes: adrChanges, entities: incomingAdrs },
-      ];
-      for (const { entityType, changes, entities } of relationshipImports) {
-        for (const id of changes.added) {
-          const entity = entities.find((candidate) => candidate.id === id);
-          for (const rel of entity?.relationships ?? []) {
-            tryAddRelationship(rel, id);
-          }
-        }
-        for (const id of changes.updated) {
-          const entity = entities.find((candidate) => candidate.id === id);
-          if (!entity) continue;
-          removeOutgoingRelationships(db, id, entityType);
-          for (const rel of entity.relationships) {
-            tryAddRelationship(rel, id);
-          }
-        }
-      }
-
-      // Note: Text reference updating is intentionally not done here
-      // The renumbered entity is imported with its new ID
-      // References within the imported data should already be using the correct IDs
-      // Updating all references globally would incorrectly change references to the local entity
+      counts.spec = IMPORT_CASES.spec.import(db, snapshot.spec, changes.spec, false);
+      counts.issue = IMPORT_CASES.issue.import(db, snapshot.issue, changes.issue, false);
+      counts.adr = IMPORT_CASES.adr.import(db, snapshot.adr, changes.adr, false);
+      importSnapshotFeedback(db, snapshot);
+      importCaseRelationships(db, "spec", snapshot.spec, changes.spec, warnings);
+      importCaseRelationships(db, "issue", snapshot.issue, changes.issue, warnings);
+      importCaseRelationships(db, "adr", snapshot.adr, changes.adr, warnings);
     });
 
-    // Clean up markdown files for deleted entities (after successful DB transaction)
     for (const filePath of markdownFilesToDelete) {
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
-        } catch (err) {
-          // Log but don't fail - file cleanup is best-effort
-          console.warn(`Failed to delete markdown file: ${filePath}`, err);
+        } catch (error) {
+          console.warn(`Failed to delete markdown file: ${filePath}`, error);
         }
       }
     }
-  } else {
-    result.specs = importSpecs(db, incomingSpecs, specChanges, dryRun);
-    result.issues = importIssues(db, incomingIssues, issueChanges, dryRun);
-    result.adrs = importAdrs(db, incomingAdrs, adrChanges, dryRun);
   }
 
-  // Log warnings for skipped relationships (non-fatal issues)
-  if (result.warnings && result.warnings.length > 0) {
+  if (warnings.length > 0) {
     console.warn(
-      `[Import] ${result.warnings.length} relationship(s) skipped due to missing entities:`
+      `[Import] ${warnings.length} relationship(s) skipped due to missing entities:`
     );
-    for (const warning of result.warnings) {
+    for (const warning of warnings) {
       console.warn(`  - ${warning.message}`);
     }
   }
 
-  return result;
+  return {
+    specs: counts.spec,
+    issues: counts.issue,
+    adrs: counts.adr,
+    collisions: resolvedCollisions,
+    warnings,
+  };
 }

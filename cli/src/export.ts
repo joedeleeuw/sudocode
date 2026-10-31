@@ -21,7 +21,10 @@ import { listAdrs } from "./operations/adrs.js";
 import { listIssues } from "./operations/issues.js";
 import { getOutgoingRelationships } from "./operations/relationships.js";
 import { getTags } from "./operations/tags.js";
-import { listFeedback } from "./operations/feedback.js";
+import {
+  feedbackToJSONL,
+  listSnapshotFeedback,
+} from "./operations/feedback.js";
 import { writeJSONL, readJSONLSync } from "./jsonl.js";
 
 export interface ExportOptions {
@@ -84,6 +87,7 @@ interface EntityJSONLMetadata {
   relationships: RelationshipJSONL[];
   tags: string[];
   external_links?: ExternalLink[];
+  feedback?: FeedbackJSONL[];
 }
 
 function entityJSONLMetadata(
@@ -102,10 +106,12 @@ function entityJSONLMetadata(
   }));
   const externalLinks =
     entity.external_links ?? existingExternalLinks?.get(entity.id);
+  const feedback = listSnapshotFeedback(db, entity.id, entityType).map(feedbackToJSONL);
   return {
     relationships: sortRelationships(relationshipsJSONL),
     tags: sortTags(getTags(db, entity.id, entityType)),
     external_links: sortExternalLinks(externalLinks),
+    feedback: feedback.length > 0 ? sortFeedback(feedback) : undefined,
   };
 }
 
@@ -122,12 +128,13 @@ export function specToJSONL(
 
 export function adrToJSONL(
   db: Database.Database,
-  adr: Adr,
+  adr: Adr & { superseded?: boolean },
   existingExternalLinks?: Map<string, ExternalLink[]>
 ): AdrJSONL {
+  const { superseded: _superseded, ...persistedAdr } = adr;
   return {
-    ...adr,
-    ...entityJSONLMetadata(db, adr, "adr", existingExternalLinks),
+    ...persistedAdr,
+    ...entityJSONLMetadata(db, persistedAdr, "adr", existingExternalLinks),
   };
 }
 
@@ -136,27 +143,9 @@ export function issueToJSONL(
   issue: Issue,
   existingExternalLinks?: Map<string, ExternalLink[]>
 ): IssueJSONL {
-  const feedbackList = listFeedback(db, { from_id: issue.id });
-  const feedbackJSONL: FeedbackJSONL[] = feedbackList.map((feedback) => ({
-    id: feedback.id,
-    from_id: feedback.from_id,
-    to_id: feedback.to_id,
-    feedback_type: feedback.feedback_type,
-    content: feedback.content,
-    agent: feedback.agent,
-    anchor:
-      feedback.anchor && typeof feedback.anchor === "string"
-        ? JSON.parse(feedback.anchor)
-        : feedback.anchor,
-    dismissed: feedback.dismissed,
-    created_at: feedback.created_at,
-    updated_at: feedback.updated_at,
-  }));
-  const sortedFeedback = sortFeedback(feedbackJSONL);
   return {
     ...issue,
     ...entityJSONLMetadata(db, issue, "issue", existingExternalLinks),
-    feedback: sortedFeedback.length > 0 ? sortedFeedback : undefined,
   };
 }
 

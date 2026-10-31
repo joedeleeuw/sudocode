@@ -7,8 +7,13 @@ import * as fs from "fs";
 import * as readline from "readline";
 import * as path from "path";
 import type { SpecJSONL, AdrJSONL, IssueJSONL } from "./types.js";
+import type { IdentityRecord } from "./identity-collisions.js";
 
-export type JSONLEntity = SpecJSONL | AdrJSONL | IssueJSONL | Record<string, any>;
+export type JSONLEntity =
+  | SpecJSONL
+  | AdrJSONL
+  | IssueJSONL
+  | (Record<string, any> & IdentityRecord);
 
 export interface ReadJSONLOptions {
   /**
@@ -32,7 +37,7 @@ export interface WriteJSONLOptions {
  * Read a JSONL file and parse all lines
  * Uses streaming for memory efficiency with large files
  */
-export async function readJSONL<T extends JSONLEntity = JSONLEntity>(
+export async function readJSONL<T = JSONLEntity>(
   filePath: string,
   options: ReadJSONLOptions = {}
 ): Promise<T[]> {
@@ -84,7 +89,7 @@ export async function readJSONL<T extends JSONLEntity = JSONLEntity>(
 /**
  * Read a JSONL file synchronously (for smaller files)
  */
-export function readJSONLSync<T extends JSONLEntity = JSONLEntity>(
+export function readJSONLSync<T = JSONLEntity>(
   filePath: string,
   options: ReadJSONLOptions = {}
 ): T[] {
@@ -134,7 +139,7 @@ export function readJSONLSync<T extends JSONLEntity = JSONLEntity>(
  * Each entity is written as a single line of JSON
  * Entities are sorted by created_at date to minimize merge conflicts
  */
-export async function writeJSONL<T extends JSONLEntity = JSONLEntity>(
+export async function writeJSONL<T = JSONLEntity>(
   filePath: string,
   entities: T[],
   options: WriteJSONLOptions = {}
@@ -226,7 +231,7 @@ export async function writeJSONL<T extends JSONLEntity = JSONLEntity>(
  * Write entities to a JSONL file synchronously
  * Entities are sorted by created_at date to minimize merge conflicts
  */
-export function writeJSONLSync<T extends JSONLEntity = JSONLEntity>(
+export function writeJSONLSync<T = JSONLEntity>(
   filePath: string,
   entities: T[],
   options: WriteJSONLOptions = {}
@@ -319,7 +324,7 @@ export function writeJSONLSync<T extends JSONLEntity = JSONLEntity>(
  * If the entity doesn't exist, append it
  * If it exists, replace the line
  */
-export async function updateJSONLLine<T extends JSONLEntity = JSONLEntity>(
+export async function updateJSONLLine<T = JSONLEntity>(
   filePath: string,
   entity: T,
   idField: string = "id"
@@ -351,7 +356,7 @@ export async function updateJSONLLine<T extends JSONLEntity = JSONLEntity>(
 /**
  * Update a single line in a JSONL file synchronously
  */
-export function updateJSONLLineSync<T extends JSONLEntity = JSONLEntity>(
+export function updateJSONLLineSync<T = JSONLEntity>(
   filePath: string,
   entity: T,
   idField: string = "id"
@@ -383,7 +388,7 @@ export function updateJSONLLineSync<T extends JSONLEntity = JSONLEntity>(
 /**
  * Delete an entity from a JSONL file by ID
  */
-export async function deleteJSONLLine<T extends JSONLEntity = JSONLEntity>(
+export async function deleteJSONLLine<T = JSONLEntity>(
   filePath: string,
   entityId: string,
   idField: string = "id"
@@ -407,7 +412,7 @@ export async function deleteJSONLLine<T extends JSONLEntity = JSONLEntity>(
 /**
  * Delete an entity from a JSONL file synchronously
  */
-export function deleteJSONLLineSync<T extends JSONLEntity = JSONLEntity>(
+export function deleteJSONLLineSync<T = JSONLEntity>(
   filePath: string,
   entityId: string,
   idField: string = "id"
@@ -431,7 +436,7 @@ export function deleteJSONLLineSync<T extends JSONLEntity = JSONLEntity>(
 /**
  * Get a single entity from a JSONL file by ID
  */
-export async function getJSONLEntity<T extends JSONLEntity = JSONLEntity>(
+export async function getJSONLEntity<T = JSONLEntity>(
   filePath: string,
   entityId: string,
   idField: string = "id"
@@ -443,7 +448,7 @@ export async function getJSONLEntity<T extends JSONLEntity = JSONLEntity>(
 /**
  * Get a single entity from a JSONL file synchronously
  */
-export function getJSONLEntitySync<T extends JSONLEntity = JSONLEntity>(
+export function getJSONLEntitySync<T = JSONLEntity>(
   filePath: string,
   entityId: string,
   idField: string = "id"

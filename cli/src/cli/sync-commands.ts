@@ -249,15 +249,8 @@ async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
   ];
   for (const { entityType, entities } of documents) {
     console.log(chalk.gray(`  Found ${entities.length} ${entityType} records in database`));
-    const entityDir = path.join(
-      ctx.outputDir,
-      getEntityRow(entityType).markdownDir
-    );
     for (const document of entities) {
-      let filePath = path.join(ctx.outputDir, document.file_path);
-      if (!fs.existsSync(filePath)) {
-        filePath = syncFileWithRename(document.id, entityDir, document.title);
-      }
+      const filePath = path.join(ctx.outputDir, document.file_path);
       const result = await syncJSONLToMarkdown(ctx.db, document.id, entityType, filePath);
       if (result.success) {
         syncedCount++;

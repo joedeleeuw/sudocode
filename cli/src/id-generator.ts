@@ -12,7 +12,7 @@
 import * as crypto from "crypto";
 import type Database from "better-sqlite3";
 import type { EntityType } from "@sudocode-ai/types";
-import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 
 /**
  * Calculate adaptive hash length based on entity count
@@ -115,24 +115,6 @@ function generateHashIDFromUUID(
   );
 }
 
-/**
- * Check if ID is legacy format (SPEC-001, ISSUE-001)
- */
-export function isLegacyID(id: string): boolean {
-  return /^(SPEC|ISSUE)-\d+$/.test(id);
-}
-
-/**
- * Check if ID is hash format (i-x7k9, s-a3f2, a-p4m8)
- */
-export function isHashID(id: string): boolean {
-  const prefix = id.split("-", 1)[0];
-  return (
-    ENTITY_ROWS.some((row) => row.prefix === prefix) &&
-    /^[a-z]-[0-9a-z]{4,8}$/.test(id)
-  );
-}
-
 export function generateEntityId(
   db: Database.Database,
   entityType: EntityType
@@ -147,25 +129,17 @@ export function generateEntityId(
   return { id, uuid };
 }
 
-export function generateSpecId(
-  db: Database.Database,
-  _outputDir: string
-): { id: string; uuid: string } {
-  return generateEntityId(db, "spec");
-}
-
-export function generateIssueId(
-  db: Database.Database,
-  _outputDir: string
-): { id: string; uuid: string } {
-  return generateEntityId(db, "issue");
-}
-
-export function generateAdrId(
-  db: Database.Database,
-  _outputDir: string
-): { id: string; uuid: string } {
-  return generateEntityId(db, "adr");
+export function generateCollisionEntityId(
+  entityType: EntityType,
+  uuid: string,
+  takenIds: ReadonlySet<string>
+): string {
+  const row = getEntityRow(entityType);
+  for (let length = 4; length <= 8; length++) {
+    const candidate = `${row.prefix}-${hashUUIDToBase36(uuid, length)}`;
+    if (!takenIds.has(candidate)) return candidate;
+  }
+  throw new Error(`Failed to allocate a unique ${row.label} ID for UUID ${uuid}`);
 }
 
 /**
@@ -233,17 +207,4 @@ function getNextIssueNumber(db: Database.Database): number {
  */
 export function generateUUID(): string {
   return crypto.randomUUID();
-}
-
-/**
- * Infer entity type from ID
- * Supports both hash-based (i-xxxx, s-xxxx) and legacy (ISSUE-xxx, SPEC-xxx) formats
- */
-export function getEntityTypeFromId(id: string): EntityType {
-  for (const row of ENTITY_ROWS) {
-    if (id.startsWith(`${row.prefix}-`) || id.startsWith(`${row.label.toUpperCase()}-`)) {
-      return row.type;
-    }
-  }
-  throw new Error(`Cannot infer entity type from ID: ${id}`);
 }

@@ -12,7 +12,7 @@ import {
   updateExistingIssue,
   deleteExistingIssue,
 } from "../services/issues.js";
-import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
+import { generateEntityId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { getIssueFromJsonl } from "@sudocode-ai/cli/dist/operations/external-links.js";
 import { broadcastIssueUpdate } from "../services/websocket.js";
 import { triggerExport, executeExportNow, syncEntityToMarkdown } from "../services/export.js";
@@ -130,8 +130,7 @@ export function createIssuesRouter(): Router {
       }
 
       // Generate new issue ID
-      const outputDir = req.project!.sudocodeDir;
-      const { id, uuid } = generateIssueId(req.project!.db, outputDir);
+      const { id, uuid } = generateEntityId(req.project!.db, "issue");
 
       // Create issue using CLI operation
       const issue = createNewIssue(req.project!.db, {

@@ -6,7 +6,7 @@ import path from "path";
 import fs from "fs";
 import chalk from "chalk";
 import type Database from "better-sqlite3";
-import { generateIssueId } from "../id-generator.js";
+import { generateEntityId } from "../id-generator.js";
 import {
   createIssue,
   getIssue,
@@ -52,7 +52,7 @@ export async function handleIssueCreate(
   const startTime = Date.now();
   try {
     // Generate issue ID and UUID
-    const { id: issueId, uuid: issueUUID } = generateIssueId(ctx.db, ctx.outputDir);
+    const { id: issueId, uuid: issueUUID } = generateEntityId(ctx.db, "issue");
 
     const issue = createIssue(ctx.db, {
       id: issueId,

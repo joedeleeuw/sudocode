@@ -195,6 +195,9 @@ function decodeConflictSides<K extends EntityType>(
       const entity = decodeSnapshotLine(filePath, entityType, line, marker.start + 2 + index);
       if (entity) ours.push(entity);
     }
+    for (const [index, line] of (section.base ?? []).entries()) {
+      decodeSnapshotLine(filePath, entityType, line, (marker.base ?? marker.start) + 2 + index);
+    }
     for (const [index, line] of section.theirs.entries()) {
       const entity = decodeSnapshotLine(filePath, entityType, line, marker.middle + 2 + index);
       if (entity) theirs.push(entity);

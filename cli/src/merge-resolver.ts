@@ -26,13 +26,20 @@ import { conflictMarkerKind, normalizeMirrorPath } from "./snapshot.js";
 
 export type ConflictSection =
   | { type: "clean"; lines: string[] }
-  | { type: "conflict"; ours: string[]; theirs: string[]; marker: ConflictMarker };
+  | {
+      type: "conflict";
+      ours: string[];
+      theirs: string[];
+      base?: string[];
+      marker: ConflictMarker;
+    };
 
 /**
  * Conflict marker metadata (zero-based line indexes)
  */
 export interface ConflictMarker {
   start: number;
+  base?: number;
   middle: number;
   end: number;
   oursLabel: string;
@@ -94,10 +101,12 @@ export function hasGitConflictMarkers(filePath: string): boolean {
 
 interface OpenConflict {
   start: number;
+  base: number | null;
   middle: number | null;
   inBase: boolean;
   oursLabel: string;
   ours: string[];
+  baseLines: string[];
   theirs: string[];
 }
 
@@ -128,13 +137,23 @@ export function parseMergeConflictFile(content: string): ConflictSection[] {
       }
       if (clean.length > 0) sections.push({ type: "clean", lines: clean });
       clean = [];
-      open = { start: index, middle: null, inBase: false, oursLabel: line.slice(7).trim(), ours: [], theirs: [] };
+      open = {
+        start: index,
+        base: null,
+        middle: null,
+        inBase: false,
+        oursLabel: line.slice(7).trim(),
+        ours: [],
+        baseLines: [],
+        theirs: [],
+      };
       continue;
     }
     const opened = `the conflict opened at line ${open.start + 1}`;
     if (kind === null) {
       if (open.middle !== null) open.theirs.push(line);
-      else if (!open.inBase) open.ours.push(line);
+      else if (open.inBase) open.baseLines.push(line);
+      else open.ours.push(line);
       continue;
     }
     if (kind === "open") {
@@ -145,6 +164,7 @@ export function parseMergeConflictFile(content: string): ConflictSection[] {
         throw new ConflictMarkerError(lineNumber, `||||||| outside the ours side of ${opened}`);
       }
       open.inBase = true;
+      open.base = index;
       continue;
     }
     if (kind === "separator") {
@@ -161,8 +181,10 @@ export function parseMergeConflictFile(content: string): ConflictSection[] {
       type: "conflict",
       ours: open.ours,
       theirs: open.theirs,
+      ...(open.base !== null ? { base: open.baseLines } : {}),
       marker: {
         start: open.start,
+        ...(open.base !== null ? { base: open.base } : {}),
         middle: open.middle,
         end: index,
         oursLabel: open.oursLabel,

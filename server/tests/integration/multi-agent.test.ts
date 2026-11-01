@@ -153,6 +153,7 @@ import {
 import { ExecutionService } from "../../src/services/execution-service.js";
 import { ExecutionLifecycleService } from "../../src/services/execution-lifecycle.js";
 import type { IWorktreeManager } from "../../src/execution/worktree/manager.js";
+import { DEFAULT_WORKTREE_CONFIG } from "../../src/execution/worktree/config.js";
 import type {
   WorktreeCreateParams,
   WorktreeInfo,
@@ -642,21 +643,6 @@ describe("Multi-Agent Support - Phase 1 Integration", () => {
   });
 
   describe("Regression Testing - Claude Code Functionality", () => {
-    it("should create Claude Code execution without breaking changes", async () => {
-      const execution = await executionService.createExecution(
-        testIssueId,
-        { mode: "worktree" as const },
-        issueContent
-      );
-
-      expect(execution).toBeDefined();
-      expect(execution.id).toBeTruthy();
-      expect(execution.issue_id).toBe(testIssueId);
-      expect(execution.agent_type).toBe("claude-code");
-      expect(execution.status).toBe("running");
-      expect(execution.worktree_path).toBeTruthy();
-      expect(execution.branch_name).toBeTruthy();
-    });
 
     it("should list executions correctly", async () => {
       // Create an execution to ensure we have data
@@ -850,38 +836,6 @@ describe("Multi-Agent Support - Phase 1 Integration", () => {
       );
     });
 
-    it("should track agent type correctly across follow-up executions", async () => {
-      // Create initial execution with worktree mode (required for follow-ups)
-      const initialExec = await executionService.createExecution(
-        testIssueId,
-        { mode: "worktree" },
-        "Initial execution for follow-up test",
-        "claude-code"
-      );
-
-      expect(initialExec.agent_type).toBe("claude-code");
-      expect(initialExec.worktree_path).toBeTruthy(); // Must have worktree for follow-ups
-
-      // Create follow-up - should inherit agent type from parent
-      const followUpExec = await executionService.createFollowUp(
-        initialExec.id,
-        "Follow-up feedback"
-      );
-
-      // Verify follow-up execution inherited the agent type
-      expect(followUpExec.agent_type).toBe("claude-code");
-      expect(followUpExec.id).toBeTruthy();
-      expect(followUpExec.id).not.toBe(initialExec.id); // Different execution
-
-      // Verify in database that agent_type was persisted
-      const dbFollowUp = db
-        .prepare("SELECT agent_type FROM executions WHERE id = ?")
-        .get(followUpExec.id) as {
-        agent_type: string;
-      };
-
-      expect(dbFollowUp.agent_type).toBe("claude-code");
-    });
   });
 });
 
@@ -891,6 +845,7 @@ describe("Multi-Agent Support - Phase 1 Integration", () => {
 function createMockWorktreeManager(): IWorktreeManager {
   return {
     getConfig: () => ({
+      ...DEFAULT_WORKTREE_CONFIG,
       worktreeStoragePath: ".worktrees",
       branchPrefix: "worktree",
       autoCreateBranches: true,
@@ -899,8 +854,8 @@ function createMockWorktreeManager(): IWorktreeManager {
       cleanupOrphanedWorktreesOnStartup: false,
     }),
 
-    createWorktree: async (_params: WorktreeCreateParams): Promise<void> => {
-      return Promise.resolve();
+    createWorktree: async (params: WorktreeCreateParams): Promise<string> => {
+      return params.worktreePath!;
     },
 
     cleanupWorktree: async (

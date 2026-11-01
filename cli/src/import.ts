@@ -13,6 +13,7 @@ import {
   type EntitySnapshots,
 } from "@sudocode-ai/types/entities";
 import { normalizeMirrorPath, readPersistedSnapshot } from "./snapshot.js";
+import { recordJSONLSync } from "./jsonl-sync-state.js";
 import {
   assignIdentities,
   createReferenceNamespace,
@@ -692,7 +693,7 @@ export async function importFromJSONL(
     );
   }
 
-  const snapshot = readPersistedSnapshot(inputDir, {
+  const { entities: snapshot, digests } = readPersistedSnapshot(inputDir, {
     spec: specsFile,
     issue: issuesFile,
     adr: adrsFile,
@@ -726,6 +727,7 @@ export async function importFromJSONL(
       counts.adr = IMPORT_CASES.adr.import(db, proposed.adr, changes.adr, false);
       importSnapshotFeedback(db, proposed);
       applyProposedGraph(db, graph);
+      for (const digest of digests) recordJSONLSync(db, digest);
     });
 
     for (const filePath of markdownFilesToDelete) {

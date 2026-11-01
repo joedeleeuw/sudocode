@@ -451,29 +451,32 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   }
 
   // Paths to watch
-  const specsDir = path.join(baseDir, getEntityRow("spec").markdownDir);
-  const issuesDir = path.join(baseDir, getEntityRow("issue").markdownDir);
-  const adrsDir = path.join(baseDir, getEntityRow("adr").markdownDir);
-  const specsJSONL = path.join(baseDir, getEntityRow("spec").jsonlFile);
-  const issuesJSONL = path.join(baseDir, getEntityRow("issue").jsonlFile);
-  const adrsJSONL = path.join(baseDir, getEntityRow("adr").jsonlFile);
-
-  // Watch directories and JSONL files - chokidar will recursively watch all files inside
-  const watcher = chokidar.watch(
-    [specsDir, issuesDir, adrsDir, specsJSONL, issuesJSONL, adrsJSONL],
-    {
-      persistent: true,
-      ignoreInitial,
-      awaitWriteFinish: {
-        stabilityThreshold: 100, // Reduced for faster detection in tests
-        pollInterval: 50,
-      },
-    }
+  const watchedEntries = new Set<string>(
+    ENTITY_ROWS.flatMap((row) => [row.markdownDir, row.jsonlFile])
   );
+
+  // Watch baseDir itself, limited to the entity directories and JSONL files
+  // and everything inside those directories. Watching a markdown directory
+  // directly while it does not exist yet misses files written right after
+  // the directory is created.
+  const watcher = chokidar.watch(baseDir, {
+    persistent: true,
+    ignoreInitial,
+    ignored: (filePath: string) => {
+      const relPath = path.relative(baseDir, filePath);
+      return (
+        relPath !== "" && !watchedEntries.has(relPath.split(path.sep)[0])
+      );
+    },
+    awaitWriteFinish: {
+      stabilityThreshold: 100, // Reduced for faster detection in tests
+      pollInterval: 50,
+    },
+  });
 
   // Log watch patterns for debugging
   onLog(
-    `[watch] Watching directories: ${specsDir}, ${issuesDir}, ${adrsDir} and JSONL files`
+    `[watch] Watching ${Array.from(watchedEntries).join(", ")} in ${baseDir}`
   );
 
   /**
@@ -1006,7 +1009,9 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
   watcher.on("change", (filePath) => handleFileChange(filePath, "change"));
   watcher.on("unlink", (filePath) => handleFileChange(filePath, "unlink"));
 
-  watcher.on("ready", async () => {
+  // once: this startup work must not run again if chokidar emits "ready"
+  // more than once
+  watcher.once("ready", async () => {
     const watched = watcher.getWatched();
     stats.filesWatched = Object.keys(watched).reduce(
       (total, dir) => total + watched[dir].length,

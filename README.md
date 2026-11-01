@@ -265,12 +265,25 @@ If the editor doesn't open:
 ### Distributed Git Database
 
 - **Source of Truth**: JSONL files (`.sudocode/specs.jsonl`, `.sudocode/issues.jsonl`, `.sudocode/adrs.jsonl`) committed to git
-- **Local Cache**: Each machine maintains a SQLite cache (`.sudocode/cache.db`, gitignored)
+- **Local Cache**: Each machine and each git worktree maintains a SQLite cache (`.sudocode/cache.db`, gitignored)
 - **Auto-Export**: SQLite → JSONL after CRUD operations (5-second debounce)
-- **Auto-Import**: JSONL → SQLite when JSONL is newer (e.g., after `git pull`)
+- **Auto-Import**: JSONL → SQLite before the cache is read or written whenever the JSONL changed since the cache last saw it (fresh clone or worktree, `git pull`, merge, checkout); an export that would delete JSONL entities the cache never imported is refused
 - **Conflict Resolution**: Git handles distribution, AI handles merge conflicts
 
 This design provides centralized database semantics through distributed git infrastructure.
+
+### Execution Worktrees
+
+Agent executions run in their own git worktree. The `worktree` section of `.sudocode/config.local.json` chooses who creates them:
+
+- `"provider": "git"` (default): `git worktree add` under `worktreeStoragePath` (`.sudocode/worktrees/<execution-id>`).
+- `"provider": "worktrunk"`: [worktrunk](https://worktrunk.dev) creates them with `wt switch --create <branch> --no-cd` and removes them with `wt remove`, so they land at your `worktree-path` (by default sibling `<repo>.<branch>` directories), show up in `wt list`, and run the repository's `.config/wt.toml` hooks. sudocode never passes `--yes`: approve the project's hooks once with `wt config approvals add`, or execution creation fails with wt's approval message.
+
+Execution branches are named by `branchTemplate`, by default `{prefix}/{executionId}/{title}` (`<branchPrefix>/<first 8 characters of the execution id>/<slugified issue title>`). The template may also use `{issueId}` and `{externalId}` (the id of the issue's first external link, such as a Jira or Linear key, slugified). A token that renders empty is dropped with one adjacent `-`, `_`, `.` or `/`, and `-2`, `-3`, … is appended when the branch already exists or another execution in the same server process is creating it in the same checkout; a branch created by another process between that check and creation fails execution creation. A rendered name git rejects (`git check-ref-format --branch`) fails execution creation with an error naming the template and the name. For example, `"branchTemplate": "{prefix}/{externalId}-{title}"` names an execution for an issue linked to `ENG-42` `sudocode/eng-42-fix-login-redirect`. With the `worktrunk` provider the template must start with `{prefix}/`, since sudocode recognizes the worktrees it manages by that prefix.
+
+Run `sudocode init-merge-driver` once in any worktree to merge `.sudocode/*.jsonl` entity-by-entity; worktrees share the setting.
+
+Codex executions launch `codex-acp` with Codex config overrides, each passed as `-c key=value`: `approval_policy` and `sandbox_mode` from the agent config's `askForApproval`, `sandbox` or `fullAuto` (or `dangerouslySkipPermissions`), `model` from the execution's `model`, then every entry of the agent config's `configOverrides`, which win on conflict. For example, `"agentConfig": { "configOverrides": { "model_reasoning_effort": "high", "sandbox_workspace_write.writable_roots": "[\"/path/to/repo/.git\"]" } }`. Values are parsed by Codex as TOML, or used as plain strings when they are not valid TOML. A `configOverrides` that is not an object of string values under non-empty keys without `=` is rejected with a 400 before the execution or its worktree is created.
 
 ## Development Flow
 

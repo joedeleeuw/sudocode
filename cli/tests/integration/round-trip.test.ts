@@ -911,6 +911,56 @@ describe("Round-Trip Data Consistency Tests", () => {
       expect(!!spec!.archived).toBe(true);
     });
 
+    it("should preserve parent_uuid through fresh import and a later export", async () => {
+      // Regression: import adds child entities in a first pass without
+      // parent_id and assigns the parent in a second-pass update. That
+      // update must also set parent_uuid, otherwise every subsequent
+      // export writes parent_uuid: null and the tracked JSONL loses the link.
+      const parentJsonl: IssueJSONL = {
+        id: "i-parentlink",
+        uuid: "uuid-parentlink",
+        title: "Parent Issue",
+        content: "Parent content",
+        status: "open",
+        priority: 2,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        archived: false,
+        relationships: [],
+        tags: [],
+      } as IssueJSONL;
+      const childJsonl: IssueJSONL = {
+        ...parentJsonl,
+        id: "i-childlink",
+        uuid: "uuid-childlink",
+        title: "Child Issue",
+        parent_id: "i-parentlink",
+        parent_uuid: "uuid-parentlink",
+      } as IssueJSONL;
+
+      fs.writeFileSync(
+        path.join(testDir, "issues.jsonl"),
+        JSON.stringify(parentJsonl) + "\n" + JSON.stringify(childJsonl) + "\n"
+      );
+      fs.writeFileSync(path.join(testDir, "specs.jsonl"), "");
+
+      // Fresh database, as in a new clone or worktree
+      await importFromJSONL(db, { inputDir: testDir });
+
+      const imported = getIssue(db, "i-childlink");
+      expect(imported!.parent_id).toBe("i-parentlink");
+      expect(imported!.parent_uuid).toBe("uuid-parentlink");
+
+      // An unrelated write followed by export must not drop the link
+      updateIssue(db, "i-parentlink", { priority: 1 });
+      await exportToJSONL(db, { outputDir: testDir });
+
+      const exported = await readJSONL<IssueJSONL>(path.join(testDir, "issues.jsonl"));
+      const child = exported.find((i) => i.id === "i-childlink");
+      expect(child!.parent_id).toBe("i-parentlink");
+      expect(child!.parent_uuid).toBe("uuid-parentlink");
+    });
+
     it("should handle empty tags array", async () => {
       createSpec(db, {
         id: "s-notags",

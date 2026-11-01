@@ -19,7 +19,7 @@ import {
 import { getTags, setTags } from "../operations/tags.js";
 import { listFeedback } from "../operations/feedback.js";
 import { exportToJSONL } from "../export.js";
-import { syncJSONLToMarkdown } from "../sync.js";
+import { assertSynced, syncEntityMetadataToMarkdown, syncJSONLToMarkdown } from "../sync.js";
 import { writeMarkdownFile } from "../markdown.js";
 import { generateUniqueFilename } from "../filename-generator.js";
 import { getEntityRow } from "@sudocode-ai/types/entities";
@@ -206,11 +206,10 @@ async function updateAdrRecord(
   if (tags !== undefined) {
     setTags(ctx.db, id, "adr", tags.split(",").map((tag) => tag.trim()));
   }
-  await syncJSONLToMarkdown(
-    ctx.db,
-    id,
-    "adr",
-    path.join(ctx.outputDir, updated.file_path)
+  const writeMarkdown =
+    input.content === undefined ? syncEntityMetadataToMarkdown : syncJSONLToMarkdown;
+  assertSynced(
+    await writeMarkdown(ctx.db, id, "adr", path.join(ctx.outputDir, updated.file_path))
   );
   await exportToJSONL(ctx.db, { outputDir: ctx.outputDir });
   return updated;
@@ -259,7 +258,7 @@ export async function handleAdrArchive(
 
 export function registerAdrCommands(
   program: Command,
-  getContext: () => CommandContext
+  getContext: () => Promise<CommandContext>
 ): void {
   const row = getEntityRow("adr");
   const command = program
@@ -274,7 +273,7 @@ export function registerAdrCommands(
     .option("--file-path <path>", "File path for markdown")
     .option("--tags <tags>", "Comma-separated tags")
     .action(async (title, options) => {
-      await handleAdrCreate(getContext(), title, options);
+      await handleAdrCreate(await getContext(), title, options);
     });
 
   command
@@ -284,14 +283,14 @@ export function registerAdrCommands(
     .option("--archived <bool>", "Filter by archive status (true/false)")
     .option("--limit <num>", "Limit results", "50")
     .action(async (options) => {
-      await handleAdrList(getContext(), options);
+      await handleAdrList(await getContext(), options);
     });
 
   command
     .command("show <id>")
     .description(`Show ${row.label} details and derived supersession`)
     .action(async (id) => {
-      await handleAdrShow(getContext(), id);
+      await handleAdrShow(await getContext(), id);
     });
 
   command
@@ -302,13 +301,13 @@ export function registerAdrCommands(
     .option("--tags <tags>", "New comma-separated tags")
     .option("--archived <bool>", "Archive status (true/false)")
     .action(async (id, options) => {
-      await handleAdrUpdate(getContext(), id, options);
+      await handleAdrUpdate(await getContext(), id, options);
     });
 
   command
     .command("archive <id>")
     .description(`Archive a withdrawn ${row.label}`)
     .action(async (id) => {
-      await handleAdrArchive(getContext(), id);
+      await handleAdrArchive(await getContext(), id);
     });
 }

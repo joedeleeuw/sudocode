@@ -534,12 +534,17 @@ export class ProjectManager {
       });
     }
 
-    // Check that cache.db exists
-    const dbPath = path.join(sudocodeDir, "cache.db");
-    if (!fs.existsSync(dbPath)) {
+    // A fresh clone or worktree has the git-tracked tracker files but no
+    // cache.db yet; openProject creates the database and imports the JSONL.
+    const isTracker = [
+      "cache.db",
+      "config.json",
+      ...ENTITY_ROWS.map((row) => row.jsonlFile),
+    ].some((file) => fs.existsSync(path.join(sudocodeDir, file)));
+    if (!isTracker) {
       return Err({
         type: "INVALID_PROJECT",
-        message: `Missing cache.db file: ${dbPath}`,
+        message: `No sudocode tracker in ${sudocodeDir} (expected cache.db, config.json or an entity JSONL file)`,
       });
     }
 

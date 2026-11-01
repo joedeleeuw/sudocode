@@ -7,7 +7,7 @@ import * as path from "path";
 import type Database from "better-sqlite3";
 import { addRelationship } from "../operations/relationships.js";
 import { exportToJSONL } from "../export.js";
-import { syncJSONLToMarkdown } from "../sync.js";
+import { syncEntityMetadataToMarkdown, assertSynced } from "../sync.js";
 import { findEntity } from "../operations/entities.js";
 import { getEntityRow } from "@sudocode-ai/types/entities";
 import { syncFileWithRename } from "../filename-generator.js";
@@ -74,7 +74,9 @@ export async function handleLink(
           path.join(ctx.outputDir, sourceRow.markdownDir),
           source.entity.title
         );
-    await syncJSONLToMarkdown(ctx.db, from, source.entityType, sourcePath);
+    assertSynced(
+      await syncEntityMetadataToMarkdown(ctx.db, from, source.entityType, sourcePath)
+    );
 
     if (ctx.jsonOutput) {
       console.log(

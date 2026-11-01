@@ -12,6 +12,7 @@ export type {
   WorktreeCreateParams,
   WorktreeInfo,
   WorktreeConfig,
+  WorktreeProvider,
 } from './types.js';
 
 export { WorktreeError, WorktreeErrorCode } from './types.js';
@@ -32,8 +33,6 @@ export {
   getWorktreeConfig,
   loadWorktreeConfig,
   validateWorktreeConfig,
-  updateWorktreeConfig,
-  setWorktreeConfigProperty,
-  resetWorktreeConfig,
   clearWorktreeConfigCache,
+  isManagedWorktree,
 } from './config.js';

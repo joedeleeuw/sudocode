@@ -90,56 +90,46 @@ export async function handleSync(
   } else if (options.toMarkdown) {
     // Manual sync from database to markdown
     await handleSyncToMarkdown(ctx);
+  } else if (isMarkdownFirst(getConfig(ctx.outputDir))) {
+    await handleSyncFromMarkdown(ctx);
   } else {
-    // Auto-detect sync direction based on file modification times
-    // TODO: Independently handle sync direction for each entity type.
-    const { direction, reason } = determineSyncDirection(ctx);
-
-    console.log(chalk.blue("Detecting sync direction..."));
-    console.log(chalk.gray(`  ${reason}`));
-    console.log();
-
-    if (direction === "no-sync") {
-      console.log(chalk.green("✓ Everything is in sync"));
-      console.log(
-        chalk.gray(
-          "  Use --from-markdown or --to-markdown to force a specific direction"
-        )
-      );
-    } else if (direction === "from-markdown") {
-      console.log(
-        chalk.blue("→ Syncing FROM markdown TO database (markdown is newer)")
-      );
-      console.log();
-      await handleSyncFromMarkdown(ctx);
-    } else if (direction === "to-markdown") {
-      console.log(
-        chalk.blue("→ Syncing FROM database TO markdown (database is newer)")
-      );
-      console.log();
-      await handleSyncToMarkdown(ctx);
-    }
+    console.error(chalk.red("✗ sudocode sync needs a direction"));
+    console.error(
+      chalk.gray(
+        "  --from-markdown  the markdown files are the source (after editing bodies by hand)"
+      )
+    );
+    console.error(
+      chalk.gray(
+        "  --to-markdown    the database and JSONL are the source (after a pull or an import)"
+      )
+    );
+    console.error(
+      chalk.gray(
+        "  Set sourceOfTruth = \"markdown\" in .sudocode/config.json to make the bare command sync from markdown."
+      )
+    );
+    process.exit(1);
   }
 }
 
 export interface ExportOptions {
-  output: string;
+  output?: string;
 }
 
 export async function handleExport(
   ctx: CommandContext,
   options: ExportOptions
 ): Promise<void> {
+  const outputDir = options.output ?? ctx.outputDir;
   try {
-    await exportToJSONL(ctx.db, { outputDir: options.output });
+    await exportToJSONL(ctx.db, { outputDir });
 
     if (ctx.jsonOutput) {
-      console.log(
-        JSON.stringify({ success: true, outputDir: options.output }, null, 2)
-      );
+      console.log(JSON.stringify({ success: true, outputDir }, null, 2));
     } else {
       console.log(chalk.green("✓ Exported to JSONL"));
-      console.log(chalk.gray(`  Output: ${options.output}`));
+      console.log(chalk.gray(`  Output: ${outputDir}`));
     }
   } catch (error) {
     console.error(chalk.red("✗ Failed to export"));
@@ -149,23 +139,22 @@ export async function handleExport(
 }
 
 export interface ImportOptions {
-  input: string;
+  input?: string;
 }
 
 export async function handleImport(
   ctx: CommandContext,
   options: ImportOptions
 ): Promise<void> {
+  const inputDir = options.input ?? ctx.outputDir;
   try {
-    await importFromJSONL(ctx.db, { inputDir: options.input });
+    await importFromJSONL(ctx.db, { inputDir });
 
     if (ctx.jsonOutput) {
-      console.log(
-        JSON.stringify({ success: true, inputDir: options.input }, null, 2)
-      );
+      console.log(JSON.stringify({ success: true, inputDir }, null, 2));
     } else {
       console.log(chalk.green("✓ Imported from JSONL"));
-      console.log(chalk.gray(`  Input: ${options.input}`));
+      console.log(chalk.gray(`  Input: ${inputDir}`));
     }
   } catch (error) {
     console.error(chalk.red("✗ Failed to import"));
@@ -325,133 +314,4 @@ function findMarkdownFiles(dir: string): string[] {
 
   scan(dir);
   return results;
-}
-
-/**
- * Get the most recent modification time from a list of files
- * Returns null if no files exist
- */
-function getMostRecentModTime(files: string[]): Date | null {
-  if (files.length === 0) return null;
-
-  let mostRecent: Date | null = null;
-
-  for (const file of files) {
-    try {
-      const stats = fs.statSync(file);
-      const mtime = stats.mtime;
-
-      if (!mostRecent || mtime > mostRecent) {
-        mostRecent = mtime;
-      }
-    } catch (error) {
-      // Ignore files that don't exist or can't be accessed
-      continue;
-    }
-  }
-
-  return mostRecent;
-}
-
-/**
- * Determine sync direction based on config and timestamps
- * Direction depends on sourceOfTruth setting:
- * - "jsonl" (default): Use timestamp comparison, prefer DB in conflicts
- * - "markdown": Always sync from markdown (markdown is authoritative)
- */
-function determineSyncDirection(ctx: CommandContext): {
-  direction: "to-markdown" | "from-markdown" | "no-sync";
-  reason: string;
-} {
-  // Check source of truth setting first
-  const config = getConfig(ctx.outputDir);
-  if (isMarkdownFirst(config)) {
-    // Markdown is source of truth - always sync from markdown
-    return {
-      direction: "from-markdown",
-      reason: "Markdown is source of truth (config.sourceOfTruth = 'markdown')",
-    };
-  }
-
-  let syncToMarkdown = false;
-  let syncFromMarkdown = false;
-  const reasons: string[] = [];
-  const entityStates: Array<{
-    row: ReturnType<typeof getEntityRow>;
-    entities: Array<{ updated_at: string }>;
-  }> = [
-    { row: getEntityRow("spec"), entities: listSpecs(ctx.db) },
-    { row: getEntityRow("issue"), entities: listIssues(ctx.db) },
-    { row: getEntityRow("adr"), entities: listAdrs(ctx.db) },
-  ];
-
-  for (const { row, entities } of entityStates) {
-    const entityDir = path.join(ctx.outputDir, row.markdownDir);
-    const markdownFiles = fs.existsSync(entityDir)
-      ? findMarkdownFiles(entityDir)
-      : [];
-    const markdownTime = getMostRecentModTime(markdownFiles);
-    const dbTime = entities.length > 0
-      ? new Date(
-          Math.max(...entities.map((entity) => new Date(entity.updated_at).getTime()))
-        )
-      : null;
-
-    if (!dbTime && !markdownTime) {
-      reasons.push(`No ${row.type} files or database entries found`);
-    } else if (!dbTime && markdownTime) {
-      syncFromMarkdown = true;
-      reasons.push(`${row.pluralLabel} database empty, markdown exists`);
-    } else if (dbTime && !markdownTime) {
-      syncToMarkdown = true;
-      reasons.push(`${row.label} markdown files missing, database has entries`);
-    } else if (dbTime && markdownTime) {
-      if (markdownTime > dbTime) {
-        syncFromMarkdown = true;
-        reasons.push(
-          `${row.label} markdown files are newer than database (${formatTime(markdownTime)} > ${formatTime(dbTime)})`
-        );
-      } else if (dbTime > markdownTime) {
-        syncToMarkdown = true;
-        reasons.push(
-          `${row.label} database is newer than markdown files (${formatTime(dbTime)} > ${formatTime(markdownTime)})`
-        );
-      } else {
-        reasons.push(`${row.pluralLabel} are in sync`);
-      }
-    }
-  }
-
-  // Decide direction - prefer database (to-markdown) in conflicts since database is source of truth
-  // Only sync from-markdown if markdown is clearly newer (user edited files)
-  if (syncFromMarkdown && syncToMarkdown) {
-    // Mixed state - prefer database as source of truth
-    // This prevents stale markdown files from overwriting fresh database/JSONL data
-    return {
-      direction: "to-markdown",
-      reason: reasons.join("; ") + " (using database as source of truth)",
-    };
-  } else if (syncFromMarkdown) {
-    return {
-      direction: "from-markdown",
-      reason: reasons.join("; "),
-    };
-  } else if (syncToMarkdown) {
-    return {
-      direction: "to-markdown",
-      reason: reasons.join("; "),
-    };
-  } else {
-    return {
-      direction: "no-sync",
-      reason: reasons.join("; "),
-    };
-  }
-}
-
-/**
- * Format timestamp for display
- */
-function formatTime(date: Date): string {
-  return date.toISOString().replace("T", " ").substring(0, 19);
 }

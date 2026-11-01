@@ -9,6 +9,8 @@ import chalk from "chalk";
 import * as path from "path";
 import * as fs from "fs";
 import { initDatabase } from "./db.js";
+import { importFromJSONL } from "./import.js";
+import { projectDirectory, ProjectNotFoundError } from "./project.js";
 import type Database from "better-sqlite3";
 
 // Import command handlers
@@ -59,7 +61,9 @@ import {
   handleInitMergeDriver,
   handleRemoveMergeDriver,
 } from "./cli/merge-commands.js";
-import { handleAuthClearCommand, handleAuthStatusCommand, handleAuthClaudeCommand } from "./cli/auth-commands.js";
+import { handleAuthClear } from "./auth/clear.js";
+import { showAuthStatus } from "./auth/status.js";
+import { handleClaudeAuth } from "./auth/claude.js";
 import {
   handleRemoteSpawn,
   handleRemoteConfig,
@@ -74,7 +78,6 @@ import {
 } from "./cli/config-commands.js";
 import { getUpdateNotification } from "./update-checker.js";
 import { VERSION } from "./version.js";
-import { importFromJSONL } from "./import.js";
 import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 // Global state
@@ -84,44 +87,28 @@ let outputDir: string = ".sudocode";
 let jsonOutput: boolean = false;
 
 /**
- * Find database path
- * Searches for .sudocode/cache.db in current directory and parent directories
+ * Open the project's database: the explicit --db path, or cache.db in the
+ * .sudocode project at the root of the current git repository.
  */
-function findDatabasePath(): string | null {
-  let currentDir = process.cwd();
-  const root = path.parse(currentDir).root;
-
-  while (currentDir !== root) {
-    const potentialPath = path.join(currentDir, ".sudocode", "cache.db");
-    if (fs.existsSync(potentialPath)) {
-      return potentialPath;
-    }
-    currentDir = path.dirname(currentDir);
-  }
-
-  return null;
-}
-
-/**
- * Initialize database connection
- */
-function initDB() {
+function initDB(): Database.Database {
   if (!dbPath) {
-    const found = findDatabasePath();
-    if (found) {
-      dbPath = found;
-      outputDir = path.dirname(found);
-    } else {
-      // Default location
-      outputDir = path.join(process.cwd(), ".sudocode");
-      dbPath = path.join(outputDir, "cache.db");
+    try {
+      outputDir = projectDirectory(process.cwd());
+    } catch (error) {
+      if (error instanceof ProjectNotFoundError) {
+        console.error(chalk.red(`Error: ${error.message}`));
+        process.exit(1);
+      }
+      throw error;
     }
+    dbPath = path.join(outputDir, "cache.db");
+  } else {
+    outputDir = path.dirname(path.resolve(dbPath));
   }
 
   try {
-    // Ensure the database directory exists before opening/creating the database
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    db = initDatabase({ path: dbPath });
+    return initDatabase({ path: dbPath });
   } catch (error) {
     console.error(chalk.red("Error: Failed to open database"));
     console.error(error instanceof Error ? error.message : String(error));
@@ -129,50 +116,21 @@ function initDB() {
   }
 }
 
+type ContextStartup = "database" | "hydrated";
+
 /**
- * Get command context
+ * Open the project's database for a command. A hydrated context first imports
+ * the whole tracked JSONL snapshot, so no command reads or exports a cache that
+ * missed a fresh clone, worktree, pull, merge or checkout. `import` and
+ * `resolve-conflicts` open the database without it: they own the snapshot.
  */
-function getContext() {
+async function getContext(startup: ContextStartup = "hydrated") {
   if (!db) {
-    console.error(chalk.red("Error: Database not initialized"));
-    process.exit(1);
-  }
-  return { db, outputDir, jsonOutput };
-}
-
-type CommandStartup = "none" | "database" | "hydrated";
-
-const COMMAND_STARTUP: Partial<Record<string, CommandStartup>> = {
-  init: "none",
-  "merge-driver": "none",
-  "init-merge-driver": "none",
-  "remove-merge-driver": "none",
-  import: "database",
-  "resolve-conflicts": "database",
-};
-
-// Create main program
-const program = new Command();
-
-program
-  .name("sudocode")
-  .description("sudocode - git-native agentic context management")
-  .version(VERSION)
-  .option("--db <path>", "Database path (default: auto-discover)")
-  .option("--json", "Output in JSON format")
-  .hook("preAction", async (_program: Command, actionCommand: Command) => {
-    const opts = actionCommand.optsWithGlobals();
-    if (opts.db) dbPath = opts.db;
-    if (opts.json) jsonOutput = true;
-
-    const topLevel = actionCommand.parent === program ? actionCommand.name() : null;
-    const startup = (topLevel && COMMAND_STARTUP[topLevel]) || "hydrated";
-    if (startup === "none") return;
-    initDB();
+    db = initDB();
     const hasTrackedEntities = ENTITY_ROWS.some((row) =>
       fs.existsSync(path.join(outputDir, row.jsonlFile))
     );
-    if (startup === "hydrated" && db && hasTrackedEntities) {
+    if (startup === "hydrated" && hasTrackedEntities) {
       try {
         await importFromJSONL(db, { inputDir: outputDir });
       } catch (error) {
@@ -182,6 +140,23 @@ program
         process.exit(1);
       }
     }
+  }
+  return { db, outputDir, jsonOutput };
+}
+
+// Create main program
+const program = new Command();
+
+program
+  .name("sudocode")
+  .description("sudocode - git-native agentic context management")
+  .version(VERSION)
+  .option("--db <path>", "Database path (default: .sudocode/cache.db at the git repository root)")
+  .option("--json", "Output in JSON format")
+  .hook("preAction", (_program: Command, actionCommand: Command) => {
+    const opts = actionCommand.optsWithGlobals();
+    if (opts.db) dbPath = opts.db;
+    if (opts.json) jsonOutput = true;
   })
   .hook("postAction", () => {
     // Close database after command completes
@@ -220,7 +195,7 @@ spec
   .option("--parent <id>", "Parent spec ID")
   .option("--tags <tags>", "Comma-separated tags")
   .action(async (title, options) => {
-    await handleSpecCreate(getContext(), title, options);
+    await handleSpecCreate(await getContext(), title, options);
   });
 
 spec
@@ -231,14 +206,14 @@ spec
   .option("--archived <bool>", "Filter by archive status (true/false)")
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleSpecList(getContext(), options);
+    await handleSpecList(await getContext(), options);
   });
 
 spec
   .command("show <id>")
   .description("Show spec details")
   .action(async (id) => {
-    await handleSpecShow(getContext(), id);
+    await handleSpecShow(await getContext(), id);
   });
 
 spec
@@ -251,14 +226,14 @@ spec
   .option("--tags <tags>", "New comma-separated tags")
   .option("--archived <bool>", "Archive status (true/false)")
   .action(async (id, options) => {
-    await handleSpecUpdate(getContext(), id, options);
+    await handleSpecUpdate(await getContext(), id, options);
   });
 
 spec
   .command("delete <id...>")
   .description("Delete one or more specs")
   .action(async (ids, options) => {
-    await handleSpecDelete(getContext(), ids, options);
+    await handleSpecDelete(await getContext(), ids, options);
   });
 
 spec
@@ -270,7 +245,7 @@ spec
   .option("--type <type>", "Relationship type (blocks, implements, etc.)")
   .option("--format <format>", "Format: inline or newline", "inline")
   .action(async (entityId, referenceId, options) => {
-    await handleAddReference(getContext(), entityId, referenceId, options);
+    await handleAddReference(await getContext(), entityId, referenceId, options);
   });
 
 registerAdrCommands(program, getContext);
@@ -293,7 +268,7 @@ issue
   .option("--parent <id>", "Parent issue ID")
   .option("--tags <tags>", "Comma-separated tags")
   .action(async (title, options) => {
-    await handleIssueCreate(getContext(), title, options);
+    await handleIssueCreate(await getContext(), title, options);
   });
 
 issue
@@ -306,14 +281,14 @@ issue
   .option("--archived <bool>", "Filter by archive status (true/false)")
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleIssueList(getContext(), options);
+    await handleIssueList(await getContext(), options);
   });
 
 issue
   .command("show <id>")
   .description("Show issue details")
   .action(async (id) => {
-    await handleIssueShow(getContext(), id);
+    await handleIssueShow(await getContext(), id);
   });
 
 issue
@@ -327,7 +302,7 @@ issue
   .option("--parent <id>", "New parent issue ID")
   .option("--archived <bool>", "Archive status (true/false)")
   .action(async (id, options) => {
-    await handleIssueUpdate(getContext(), id, options);
+    await handleIssueUpdate(await getContext(), id, options);
   });
 
 issue
@@ -335,7 +310,7 @@ issue
   .description("Close one or more issues")
   .option("-r, --reason <reason>", "Reason for closing")
   .action(async (ids, options) => {
-    await handleIssueClose(getContext(), ids, options);
+    await handleIssueClose(await getContext(), ids, options);
   });
 
 issue
@@ -346,7 +321,7 @@ issue
     "Permanently delete from database (default: close the issue)"
   )
   .action(async (ids, options) => {
-    await handleIssueDelete(getContext(), ids, options);
+    await handleIssueDelete(await getContext(), ids, options);
   });
 
 issue
@@ -359,7 +334,7 @@ issue
   .option("--format <format>", "Format: inline or newline", "inline")
   .option("--position <position>", "Position: before or after", "after")
   .action(async (entityId, referenceId, options) => {
-    await handleAddReference(getContext(), entityId, referenceId, options);
+    await handleAddReference(await getContext(), entityId, referenceId, options);
   });
 
 // ============================================================================
@@ -371,7 +346,7 @@ program
   .description("Create a relationship between entities")
   .option("-t, --type <type>", "Relationship type", "references")
   .action(async (from, to, options) => {
-    await handleLink(getContext(), from, to, options);
+    await handleLink(await getContext(), from, to, options);
   });
 
 // ============================================================================
@@ -382,14 +357,14 @@ program
   .command("ready")
   .description("Show ready issues (no blockers)")
   .action(async (options) => {
-    await handleReady(getContext(), options);
+    await handleReady(await getContext(), options);
   });
 
 program
   .command("blocked")
   .description("Show blocked issues")
   .action(async (options) => {
-    await handleBlocked(getContext(), options);
+    await handleBlocked(await getContext(), options);
   });
 
 // ============================================================================
@@ -401,14 +376,14 @@ program
   .description("Show project status summary")
   .option("-v, --verbose", "Show detailed status")
   .action(async (options) => {
-    await handleStatus(getContext(), options);
+    await handleStatus(await getContext(), options);
   });
 
 program
   .command("stats")
   .description("Show detailed project statistics")
   .action(async (options) => {
-    await handleStats(getContext(), options);
+    await handleStats(await getContext(), options);
   });
 
 // ============================================================================
@@ -423,21 +398,21 @@ config
   .command("get [key]")
   .description("Get config value (or show all if no key)")
   .action(async (key) => {
-    await handleConfigGet(getContext(), key, { jsonOutput });
+    await handleConfigGet(await getContext(), key, { jsonOutput });
   });
 
 config
   .command("set <key> <value>")
   .description("Set config value")
   .action(async (key, value) => {
-    await handleConfigSet(getContext(), key, value, { jsonOutput });
+    await handleConfigSet(await getContext(), key, value, { jsonOutput });
   });
 
 config
   .command("show")
   .description("Show current source of truth configuration")
   .action(async () => {
-    await handleConfigShow(getContext(), { jsonOutput });
+    await handleConfigShow(await getContext(), { jsonOutput });
   });
 
 // ============================================================================
@@ -461,7 +436,7 @@ feedback
   .option("-c, --content <text>", "Feedback content (required)")
   .option("-a, --agent <name>", "Agent name")
   .action(async (targetId, issueId, options) => {
-    await handleFeedbackAdd(getContext(), issueId, targetId, options);
+    await handleFeedbackAdd(await getContext(), issueId, targetId, options);
   });
 
 feedback
@@ -476,14 +451,14 @@ feedback
   )
   .option("--limit <num>", "Limit results", "50")
   .action(async (options) => {
-    await handleFeedbackList(getContext(), options);
+    await handleFeedbackList(await getContext(), options);
   });
 
 feedback
   .command("show <id>")
   .description("Show detailed feedback information")
   .action(async (id) => {
-    await handleFeedbackShow(getContext(), id);
+    await handleFeedbackShow(await getContext(), id);
   });
 
 feedback
@@ -491,14 +466,14 @@ feedback
   .description("Dismiss feedback")
   .option("-c, --comment <text>", "Optional comment")
   .action(async (id) => {
-    await handleFeedbackDismiss(getContext(), id);
+    await handleFeedbackDismiss(await getContext(), id);
   });
 
 feedback
   .command("stale")
   .description("List all stale feedback anchors")
   .action(async () => {
-    await handleFeedbackStale(getContext());
+    await handleFeedbackStale(await getContext());
   });
 
 feedback
@@ -506,7 +481,7 @@ feedback
   .description("Manually relocate a stale anchor")
   .option("-l, --line <number>", "New line number (required)")
   .action(async (id, options) => {
-    await handleFeedbackRelocate(getContext(), id, options);
+    await handleFeedbackRelocate(await getContext(), id, options);
   });
 
 // ============================================================================
@@ -515,28 +490,28 @@ feedback
 
 program
   .command("sync")
-  .description("Sync between markdown, JSONL, and database")
+  .description("Sync between markdown, JSONL, and database (pass --from-markdown or --to-markdown)")
   .option("--watch", "Watch for changes and auto-sync")
   .option("--from-markdown", "Sync from markdown to database")
   .option("--to-markdown", "Sync from database to markdown")
   .action(async (options) => {
-    await handleSync(getContext(), options);
+    await handleSync(await getContext(), options);
   });
 
 program
   .command("export")
   .description("Export database to JSONL")
-  .option("-o, --output <dir>", "Output directory", ".sudocode")
+  .option("-o, --output <dir>", "Output directory (default: the project's .sudocode)")
   .action(async (options) => {
-    await handleExport(getContext(), options);
+    await handleExport(await getContext(), options);
   });
 
 program
   .command("import")
   .description("Import from JSONL to database")
-  .option("-i, --input <dir>", "Input directory", ".sudocode")
+  .option("-i, --input <dir>", "Input directory (default: the project's .sudocode)")
   .action(async (options) => {
-    await handleImport(getContext(), options);
+    await handleImport(await getContext("database"), options);
   });
 
 // ============================================================================
@@ -549,7 +524,7 @@ program
   .option("-p, --port <port>", "Port to run server on")
   .option("-d, --detach", "Run server in background")
   .action(async (options) => {
-    await handleServerStart(getContext(), options);
+    await handleServerStart(await getContext(), options);
   });
 
 // ============================================================================
@@ -582,7 +557,7 @@ program
   .option("--dry-run", "Show what would be done without making changes")
   .option("--verbose", "Show detailed resolution information")
   .action(async (options) => {
-    await handleResolveConflicts(getContext(), options);
+    await handleResolveConflicts(await getContext("database"), options);
   });
 
 program
@@ -639,7 +614,7 @@ plugin
   .description("List available integration plugins")
   .option("-a, --all", "Show all plugins including not installed")
   .action(async (options) => {
-    await handlePluginList(getContext(), options);
+    await handlePluginList({ jsonOutput }, options);
   });
 
 plugin
@@ -647,7 +622,7 @@ plugin
   .description("Install an integration plugin")
   .option("-g, --global", "Install globally")
   .action(async (name, options) => {
-    await handlePluginInstall(getContext(), name, options);
+    await handlePluginInstall({ jsonOutput }, name, options);
   });
 
 plugin
@@ -655,14 +630,14 @@ plugin
   .description("Uninstall an integration plugin")
   .option("-g, --global", "Uninstall globally")
   .action(async (name, options) => {
-    await handlePluginUninstall(getContext(), name, options);
+    await handlePluginUninstall({ jsonOutput }, name, options);
   });
 
 plugin
   .command("status")
   .description("Show status of installed plugins")
   .action(async () => {
-    await handlePluginStatus(getContext());
+    await handlePluginStatus({ jsonOutput });
   });
 
 plugin
@@ -682,7 +657,7 @@ plugin
   )
   .option("--test", "Run connection test after configuration")
   .action(async (name, options) => {
-    await handlePluginConfigure(getContext(), name, {
+    await handlePluginConfigure(await getContext(), name, {
       set: options.set,
       options: options.options,
       enable: options.enable,
@@ -698,14 +673,14 @@ plugin
   .command("test <name>")
   .description("Test a plugin's connection/setup")
   .action(async (name) => {
-    await handlePluginTest(getContext(), name);
+    await handlePluginTest(await getContext(), name);
   });
 
 plugin
   .command("info <name>")
   .description("Show detailed information about a plugin")
   .action(async (name) => {
-    await handlePluginInfo(getContext(), name);
+    await handlePluginInfo(await getContext(), name);
   });
 
 // ============================================================================
@@ -722,7 +697,7 @@ auth
   .option("-f, --force", "Overwrite existing token without confirmation")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClaudeCommand(getContext(), options);
+    await handleClaudeAuth(options);
   });
 
 auth
@@ -730,7 +705,7 @@ auth
   .description("Check authentication status for all services")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthStatusCommand(getContext(), options);
+    await showAuthStatus({ json: options.json || jsonOutput });
   });
 
 auth
@@ -739,7 +714,7 @@ auth
   .option("-f, --force", "Skip confirmation prompt")
   .action(async (options) => {
     // Auth commands don't need database context, but we need to provide it for consistency
-    await handleAuthClearCommand(getContext(), options);
+    await handleAuthClear(options);
   });
 
 // ============================================================================
@@ -767,7 +742,7 @@ codespaces
   .option('--retention <days>', 'Retention period in days', parseInt)
   .option('--dev', 'Spawn in development mode (uses local sudocode packages)')
   .action(async (options) => {
-    await handleRemoteSpawn(getContext(), 'codespaces', options);
+    await handleRemoteSpawn(await getContext(), 'codespaces', options);
   });
 
 codespaces
@@ -780,21 +755,21 @@ codespaces
   .option('--port <number>', 'Server port', parseInt)
   .option('--reset', 'Reset to defaults')
   .action(async (options) => {
-    await handleRemoteConfig(getContext(), 'codespaces', options);
+    await handleRemoteConfig(await getContext(), 'codespaces', options);
   });
 
 codespaces
   .command('list')
   .description('List all codespaces deployments')
   .action(async () => {
-    await handleRemoteList(getContext(), 'codespaces');
+    await handleRemoteList(await getContext(), 'codespaces');
   });
 
 codespaces
   .command('status <id>')
   .description('Get codespaces deployment status')
   .action(async (id) => {
-    await handleRemoteStatus(getContext(), 'codespaces', id);
+    await handleRemoteStatus(await getContext(), 'codespaces', id);
   });
 
 codespaces
@@ -802,7 +777,7 @@ codespaces
   .description('Stop a codespaces deployment')
   .option('-f, --force', 'Skip confirmation')
   .action(async (id, options) => {
-    await handleRemoteStop(getContext(), 'codespaces', id, options);
+    await handleRemoteStop(await getContext(), 'codespaces', id, options);
   });
 
 // Coder provider (not yet supported)
@@ -855,8 +830,15 @@ coder
     process.exit(1);
   });
 
-// Parse arguments
-program.parse(process.argv);
+// Parse arguments. Async actions reject on errors raised outside a handler's own
+// try/catch (e.g. a stale-JSONL import failure in getContext): report and fail.
+program.parseAsync(process.argv).catch((error: unknown) => {
+  console.error(
+    chalk.red("Error:"),
+    error instanceof Error ? error.message : String(error)
+  );
+  process.exit(1);
+});
 
 // Check for updates (non-blocking)
 // Skip for update and server commands (server handles it explicitly)

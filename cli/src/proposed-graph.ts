@@ -150,7 +150,30 @@ export interface ProposedState {
  * snapshot.
  */
 export function validateProposedSnapshot(snapshot: EntitySnapshots): ProposedState {
-  return { snapshot, relationships: proposedRelationships(snapshot) };
+  const relationships = proposedRelationships(snapshot);
+  return {
+    snapshot: {
+      spec: withParentUuids(snapshot.spec),
+      issue: withParentUuids(snapshot.issue),
+      adr: snapshot.adr,
+    },
+    relationships,
+  };
+}
+
+/**
+ * parent_uuid is derived from parent_id at this boundary, whatever the file
+ * holds. proposedRelationships has already rejected a parent_uuid that names
+ * another entity, so this only fills one an older release wrote as null.
+ */
+function withParentUuids<T extends { uuid: string; id: string; parent_id?: string; parent_uuid?: string }>(
+  entities: readonly T[]
+): T[] {
+  const uuids = new Map(entities.map((entity) => [entity.id, entity.uuid]));
+  return entities.map((entity) => ({
+    ...entity,
+    parent_uuid: entity.parent_id === undefined ? undefined : uuids.get(entity.parent_id),
+  }));
 }
 
 /**

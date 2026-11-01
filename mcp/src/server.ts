@@ -20,8 +20,8 @@ import * as relationshipTools from "./tools/relationships.js";
 import * as feedbackTools from "./tools/feedback.js";
 import * as referenceTools from "./tools/references.js";
 import { SudocodeMCPServerConfig } from "./types.js";
-import { existsSync } from "fs";
-import { join } from "path";
+import { existsSync, statSync } from "fs";
+import { isAbsolute, join } from "path";
 import {
   type Scope,
   type ScopeConfig,
@@ -35,7 +35,7 @@ import {
   getToolByName,
   getHandlerType,
 } from "./tool-registry.js";
-import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
+import { getEntityRow } from "@sudocode-ai/types/entities";
 
 const adrEntityRow = getEntityRow("adr");
 
@@ -46,7 +46,7 @@ export class SudocodeMCPServer {
   private config: SudocodeMCPServerConfig;
   private scopeConfig: ScopeConfig;
   private usableScopes: Set<Scope>;
-  private isInitialized: boolean = false;
+  private projectClients = new Map<string, SudocodeClient>();
 
   constructor(config?: SudocodeMCPServerConfig) {
     this.config = config || {};
@@ -108,7 +108,7 @@ export class SudocodeMCPServer {
 
     // Handle tool calls - route to CLI or API based on tool scope
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
+      const { name, arguments: args = {} } = request.params;
 
       // Get tool definition
       const tool = getToolByName(name);
@@ -137,26 +137,7 @@ export class SudocodeMCPServer {
         };
       }
 
-      // Check initialization for CLI tools
       const handlerType = getHandlerType(tool);
-      if (handlerType === "cli" && !this.isInitialized) {
-        // Re-check in case project was initialized after server started
-        const initStatus = await this.checkForInit();
-        if (initStatus.initialized) {
-          this.isInitialized = true;
-        } else {
-          const workingDir = this.client["workingDir"] || process.cwd();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `⚠️  sudocode is not initialized in this directory.\n\nWorking directory: ${workingDir}\n\nPlease run 'sudocode init' in your project root first.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
 
       try {
         let result: unknown;
@@ -288,36 +269,69 @@ sudocode is a git-native spec, issue, and ADR management system designed for AI-
     name: string,
     args: Record<string, unknown>
   ): Promise<unknown> {
+    const { project, ...toolArgs } = args;
+    const client = this.clientFor(project);
     switch (name) {
       case "ready":
-        return issueTools.ready(this.client, args as any);
+        return issueTools.ready(client, toolArgs as any);
       case "list_issues":
-        return issueTools.listIssues(this.client, args as any);
+        return issueTools.listIssues(client, toolArgs as any);
       case "show_issue":
-        return issueTools.showIssue(this.client, args as any);
+        return issueTools.showIssue(client, toolArgs as any);
       case "upsert_issue":
-        return issueTools.upsertIssue(this.client, args as any);
+        return issueTools.upsertIssue(client, toolArgs as any);
       case "list_specs":
-        return specTools.listSpecs(this.client, args as any);
+        return specTools.listSpecs(client, toolArgs as any);
       case "show_spec":
-        return specTools.showSpec(this.client, args as any);
+        return specTools.showSpec(client, toolArgs as any);
       case "upsert_spec":
-        return specTools.upsertSpec(this.client, args as any);
+        return specTools.upsertSpec(client, toolArgs as any);
       case `list_${adrEntityRow.toolStem}s`:
-        return adrTools.listAdrs(this.client, adrTools.decodeListAdrsParams(args));
+        return adrTools.listAdrs(client, adrTools.decodeListAdrsParams(toolArgs));
       case `show_${adrEntityRow.toolStem}`:
-        return adrTools.showAdr(this.client, adrTools.decodeShowAdrParams(args));
+        return adrTools.showAdr(client, adrTools.decodeShowAdrParams(toolArgs));
       case `upsert_${adrEntityRow.toolStem}`:
-        return adrTools.upsertAdr(this.client, adrTools.decodeUpsertAdrParams(args));
+        return adrTools.upsertAdr(client, adrTools.decodeUpsertAdrParams(toolArgs));
       case "link":
-        return relationshipTools.link(this.client, args as any);
+        return relationshipTools.link(client, toolArgs as any);
       case "add_reference":
-        return referenceTools.addReference(this.client, args as any);
+        return referenceTools.addReference(client, toolArgs as any);
       case "add_feedback":
-        return feedbackTools.addFeedback(this.client, args as any);
+        return feedbackTools.addFeedback(client, toolArgs as any);
       default:
         throw new Error(`Unknown CLI tool: ${name}`);
     }
+  }
+
+  /**
+   * The CLI client for a tool call's project: the server's working directory
+   * when the call names none, otherwise one client per project path.
+   */
+  private clientFor(project: unknown): SudocodeClient {
+    if (project === undefined) {
+      return this.client;
+    }
+    if (typeof project !== "string" || !isAbsolute(project)) {
+      throw new Error(
+        `project must be an absolute path inside a git repository, got ${JSON.stringify(project)}`
+      );
+    }
+    if (!existsSync(project) || !statSync(project).isDirectory()) {
+      throw new Error(`project ${project} is not a directory`);
+    }
+    const pinnedDatabase = this.config.dbPath ?? process.env.SUDOCODE_DB;
+    if (pinnedDatabase) {
+      throw new Error(
+        `project ${project} cannot be used: this server is pinned to the database ${pinnedDatabase}`
+      );
+    }
+    const existing = this.projectClients.get(project);
+    if (existing) {
+      return existing;
+    }
+    const client = new SudocodeClient({ ...this.config, workingDir: project });
+    this.projectClients.set(project, client);
+    return client;
   }
 
   /**
@@ -387,124 +401,7 @@ sudocode is a git-native spec, issue, and ADR management system designed for AI-
     }
   }
 
-  /**
-   * Check for .sudocode directory and required files
-   * Returns initialization status and handles auto-import if needed
-   */
-  private async checkForInit(): Promise<{
-    initialized: boolean;
-    sudocodeExists: boolean;
-    message?: string;
-  }> {
-    const workingDir = this.client["workingDir"] || process.cwd();
-    const sudocodeDir = join(workingDir, ".sudocode");
-    const cacheDbPath = join(sudocodeDir, "cache.db");
-    const hasTrackedEntities = ENTITY_ROWS.some((row) =>
-      existsSync(join(sudocodeDir, row.jsonlFile))
-    );
-
-    // Check if .sudocode directory exists
-    if (!existsSync(sudocodeDir)) {
-      return {
-        initialized: false,
-        sudocodeExists: false,
-        message: "No .sudocode directory found",
-      };
-    }
-
-    // .sudocode exists, check for cache.db
-    if (!existsSync(cacheDbPath)) {
-      // Try to auto-import from JSONL files if they exist
-      if (hasTrackedEntities) {
-        try {
-          console.error(
-            "Found .sudocode directory but no cache.db, running import..."
-          );
-          await this.client.exec(["import"]);
-          console.error("✓ Successfully imported data to cache.db");
-          return {
-            initialized: true,
-            sudocodeExists: true,
-            message: "Auto-imported from JSONL files",
-          };
-        } catch (error) {
-          return {
-            initialized: false,
-            sudocodeExists: true,
-            message: `Failed to import: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          };
-        }
-      } else {
-        try {
-          console.error(
-            "Found .sudocode directory but no tracked entity JSONL, running init..."
-          );
-          await this.client.exec(["init"]);
-          console.error("✓ Successfully initialized sudocode");
-          await this.client.exec(["import"]);
-          return {
-            initialized: true,
-            sudocodeExists: true,
-            message: "Initialized sudocode",
-          };
-        } catch (error) {
-          return {
-            initialized: false,
-            sudocodeExists: true,
-            message: `Failed to initialize: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          };
-        }
-      }
-    }
-
-    return {
-      initialized: true,
-      sudocodeExists: true,
-    };
-  }
-
-  /**
-   * Check if sudocode is initialized in the working directory
-   * This provides early warning to users without blocking server startup
-   */
-  private async checkInitialization() {
-    const initStatus = await this.checkForInit();
-    const workingDir = this.client["workingDir"] || process.cwd();
-
-    if (initStatus.initialized) {
-      this.isInitialized = true;
-      console.error("✓ sudocode initialized successfully");
-      if (initStatus.message) {
-        console.error(`  ${initStatus.message}`);
-      }
-    } else {
-      this.isInitialized = false;
-      console.error("");
-      console.error("⚠️  WARNING: sudocode is not initialized");
-      console.error(`   Working directory: ${workingDir}`);
-      console.error("");
-
-      if (!initStatus.sudocodeExists) {
-        console.error("   No .sudocode directory found.");
-        console.error("   To initialize, run:");
-        console.error("   $ sudocode init");
-      } else {
-        console.error(`   Issue: ${initStatus.message}`);
-        console.error("   The .sudocode directory exists but is incomplete.");
-        console.error("   Try running:");
-        console.error("   $ sudocode import");
-      }
-    }
-  }
-
   async run() {
-    // Check if sudocode is initialized (non-blocking warning)
-    await this.checkInitialization();
-
     // Log scope configuration
     const enabledScopesList = Array.from(this.usableScopes).join(", ");
     const availableTools = getToolDefsForScopes(this.usableScopes);

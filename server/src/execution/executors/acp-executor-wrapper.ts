@@ -29,7 +29,11 @@ import {
   serializeCoalescedUpdate,
   type UserMessageComplete,
 } from "../output/coalesced-types.js";
-import { updateExecution, getExecution } from "../../services/executions.js";
+import {
+  updateExecution,
+  getExecution,
+  type UpdateExecutionInput,
+} from "../../services/executions.js";
 import {
   broadcastExecutionUpdate,
   broadcastSessionEvent,
@@ -231,6 +235,8 @@ export class AcpExecutorWrapper {
   private fileHandlers: Map<string, FileHandler> = new Map();
   /** Persistent session state by execution ID */
   private persistentSessions: Map<string, PersistentSessionState> = new Map();
+  /** Executions whose completed or failed status has been claimed */
+  private finalizedExecutions: Set<string> = new Set();
 
   constructor(config: AcpExecutorWrapperConfig) {
     this.agentType = config.agentType;
@@ -473,6 +479,7 @@ export class AcpExecutorWrapper {
         `[AcpExecutorWrapper] Execution failed for ${executionId}:`,
         error
       );
+      this.endFailedPersistentSession(executionId);
       await this.handleError(executionId, error as Error, workDir);
       throw error;
     } finally {
@@ -729,6 +736,7 @@ export class AcpExecutorWrapper {
         `[AcpExecutorWrapper] Resume failed for ${executionId}:`,
         error
       );
+      this.endFailedPersistentSession(executionId);
       await this.handleError(executionId, error as Error, workDir);
       throw error;
     } finally {
@@ -1233,8 +1241,7 @@ export class AcpExecutorWrapper {
         `[AcpExecutorWrapper] Error sending prompt to persistent session ${executionId}:`,
         error
       );
-      // Mark session as ended on error
-      persistentState.state = "ended";
+      this.endFailedPersistentSession(executionId);
       await this.handleError(
         executionId,
         error as Error,
@@ -1247,7 +1254,8 @@ export class AcpExecutorWrapper {
   /**
    * Explicitly end a persistent session
    *
-   * Closes the agent, cleans up resources, and marks the execution as completed.
+   * Closes the agent, cleans up resources, and marks the execution as
+   * completed unless it has already completed or failed.
    *
    * @param executionId - Execution ID with active persistent session
    * @param reason - Reason for ending the session (default: "explicit")
@@ -1465,6 +1473,51 @@ export class AcpExecutorWrapper {
   }
 
   /**
+   * Make a failed persistent session terminal: it accepts no more prompts,
+   * and its idle timeout and disconnect handler can no longer end it
+   */
+  private endFailedPersistentSession(executionId: string): void {
+    const persistentState = this.persistentSessions.get(executionId);
+    if (!persistentState) return;
+    this.clearIdleTimeout(executionId);
+    persistentState.unregisterDisconnectCallback?.();
+    persistentState.unregisterDisconnectCallback = undefined;
+    persistentState.state = "ended";
+  }
+
+  /**
+   * Claim the one terminal status of an execution. The first of
+   * handleSuccess and handleError to claim it writes its status; the other
+   * leaves it, so a failed execution is never later marked completed.
+   */
+  private claimFinalization(executionId: string): boolean {
+    if (this.finalizedExecutions.has(executionId)) {
+      console.log(
+        `[AcpExecutorWrapper] Execution ${executionId} already finalized; keeping its status`
+      );
+      return false;
+    }
+    this.finalizedExecutions.add(executionId);
+    return true;
+  }
+
+  /**
+   * Write the claimed terminal status. If the write fails the claim is
+   * released, so a retry can still persist a terminal status.
+   */
+  private writeTerminalStatus(
+    executionId: string,
+    input: UpdateExecutionInput
+  ): void {
+    try {
+      updateExecution(this.db, executionId, input);
+    } catch (error) {
+      this.finalizedExecutions.delete(executionId);
+      throw error;
+    }
+  }
+
+  /**
    * Clear the idle timeout for a persistent session
    */
   private clearIdleTimeout(executionId: string): void {
@@ -1528,6 +1581,7 @@ export class AcpExecutorWrapper {
     executionId: string,
     workDir: string
   ): Promise<void> {
+    if (!this.claimFinalization(executionId)) return;
     console.log(
       `[AcpExecutorWrapper] Execution ${executionId} completed successfully`
     );
@@ -1573,7 +1627,7 @@ export class AcpExecutorWrapper {
     }
 
     // Update execution status
-    updateExecution(this.db, executionId, {
+    this.writeTerminalStatus(executionId, {
       after_commit: afterCommit,
       files_changed: filesChangedJson,
       status: "completed",
@@ -1608,6 +1662,7 @@ export class AcpExecutorWrapper {
     error: Error,
     workDir: string
   ): Promise<void> {
+    if (!this.claimFinalization(executionId)) return;
     console.error(
       `[AcpExecutorWrapper] Execution ${executionId} failed:`,
       error
@@ -1633,7 +1688,7 @@ export class AcpExecutorWrapper {
     }
 
     // Update execution status
-    updateExecution(this.db, executionId, {
+    this.writeTerminalStatus(executionId, {
       status: "failed",
       completed_at: new Date().toISOString(),
       error_message: error.message,

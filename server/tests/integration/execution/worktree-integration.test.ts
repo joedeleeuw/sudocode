@@ -21,10 +21,29 @@ import { generateIssueId } from "@sudocode-ai/cli/dist/id-generator.js";
 import { createIssue } from "@sudocode-ai/cli/dist/operations/index.js";
 import { WorktreeManager } from "../../../src/execution/worktree/manager.js";
 import type { WorktreeConfig } from "../../../src/execution/worktree/types.js";
+import {
+  DEFAULT_WORKTREE_CONFIG,
+  isManagedWorktree,
+  loadWorktreeConfig,
+} from "../../../src/execution/worktree/config.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
+
+const hasWorktrunk = (() => {
+  try {
+    execSync("wt --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/** Providers available on this machine; worktrunk needs `wt` on PATH */
+const PROVIDERS: WorktreeConfig["provider"][] = hasWorktrunk
+  ? ["git", "worktrunk"]
+  : ["git"];
 
 describe("Worktree Integration Tests", () => {
   let db: Database.Database;
@@ -100,6 +119,7 @@ describe("Worktree Integration Tests", () => {
   describe("E2E Execution with Worktree", () => {
     it("should create execution with worktree and cleanup after completion", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -162,6 +182,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should work with existing branch when autoCreateBranches is false", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: false,
         autoDeleteBranches: false,
@@ -206,6 +227,7 @@ describe("Worktree Integration Tests", () => {
   describe("Cleanup on Failure", () => {
     it("should cleanup worktree when execution fails", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -260,6 +282,7 @@ describe("Worktree Integration Tests", () => {
   describe("Cleanup on Cancellation", () => {
     it("should cleanup worktree when execution is stopped", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -311,8 +334,10 @@ describe("Worktree Integration Tests", () => {
   });
 
   describe("Startup Orphaned Cleanup", () => {
-    it("should cleanup orphaned worktrees on startup", async () => {
+    it.each(PROVIDERS)("should preserve worktrees recorded by executions (%s provider)", async (provider) => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
+        provider,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -373,6 +398,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should cleanup worktrees without execution records", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -416,8 +442,10 @@ describe("Worktree Integration Tests", () => {
       expect(!fs.existsSync(orphanedPath)).toBeTruthy();
     });
 
-    it("should not cleanup worktrees for running executions", async () => {
+    it.each(PROVIDERS)("should not cleanup worktrees for running executions (%s provider)", async (provider) => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
+        provider,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -465,6 +493,7 @@ describe("Worktree Integration Tests", () => {
     it("should respect autoCreateBranches config", async () => {
       // Test with autoCreateBranches: true
       const configWithAuto: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -503,6 +532,7 @@ describe("Worktree Integration Tests", () => {
     it("should respect autoDeleteBranches config", async () => {
       // Test with autoDeleteBranches: true
       const configWithAutoDelete: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -541,6 +571,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should respect sparseCheckout config", async () => {
       const configWithSparse: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -592,6 +623,7 @@ describe("Worktree Integration Tests", () => {
   describe("Race Condition Handling", () => {
     it("should prevent duplicate executions for same issue", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -636,6 +668,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should handle concurrent executions for different issues", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -700,6 +733,7 @@ describe("Worktree Integration Tests", () => {
   describe("Error Recovery", () => {
     it("should not create execution if repository is invalid", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -740,6 +774,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should not create execution if target branch does not exist", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: false,
@@ -771,6 +806,7 @@ describe("Worktree Integration Tests", () => {
 
     it("should cleanup worktree if execution creation fails after worktree created", async () => {
       const config: WorktreeConfig = {
+        ...DEFAULT_WORKTREE_CONFIG,
         worktreeStoragePath: ".sudocode/worktrees",
         autoCreateBranches: true,
         autoDeleteBranches: true,
@@ -812,6 +848,208 @@ describe("Worktree Integration Tests", () => {
       // Verify worktree was removed
       expect(!fs.existsSync(result.worktreePath)).toBeTruthy();
     });
+  });
+
+  describe("Branch Template", () => {
+    const checkedOutBranch = (worktreePath: string) =>
+      execSync("git rev-parse --abbrev-ref HEAD", {
+        cwd: worktreePath,
+        encoding: "utf-8",
+      }).trim();
+
+    it("names branches {prefix}/{executionId}/{title} by default", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({ ...DEFAULT_WORKTREE_CONFIG, branchPrefix: "sudocode" })
+      );
+
+      const result = await service.createExecutionWithWorktree({
+        issueId: createTestIssue("Default Template"),
+        issueTitle: "Fix: the Login redirect!",
+        agentType: "claude-code",
+        targetBranch: "main",
+        repoPath: gitRepoPath,
+      });
+
+      const expected = `sudocode/${result.execution.id.substring(0, 8)}/fix-the-login-redirect`;
+      expect(result.branchName).toBe(expected);
+      expect(checkedOutBranch(result.worktreePath)).toBe(expected);
+
+      await service.cleanupExecution(result.execution.id);
+    });
+
+    it("renders the configured template and suffixes a branch that already exists", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({
+          ...DEFAULT_WORKTREE_CONFIG,
+          branchPrefix: "team",
+          branchTemplate: "{prefix}/{externalId}-{title}",
+        })
+      );
+      const create = (issueExternalId?: string) =>
+        service.createExecutionWithWorktree({
+          issueId: createTestIssue("Template Issue"),
+          issueTitle: "Speed up search",
+          issueExternalId,
+          agentType: "codex",
+          targetBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+      const linked = await create("ENG-42");
+      const linkedAgain = await create("ENG-42");
+      const unlinked = await create(undefined);
+
+      expect(checkedOutBranch(linked.worktreePath)).toBe("team/eng-42-speed-up-search");
+      expect(checkedOutBranch(linkedAgain.worktreePath)).toBe("team/eng-42-speed-up-search-2");
+      expect(checkedOutBranch(unlinked.worktreePath)).toBe("team/speed-up-search");
+
+      for (const result of [linked, linkedAgain, unlinked]) {
+        await service.cleanupExecution(result.execution.id);
+      }
+    });
+
+    it("gives concurrent executions that render the same name distinct branches", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({
+          ...DEFAULT_WORKTREE_CONFIG,
+          branchPrefix: "team",
+          branchTemplate: "{prefix}/{externalId}-{title}",
+        })
+      );
+
+      const results = await Promise.all(
+        [1, 2, 3].map(() =>
+          service.createExecutionWithWorktree({
+            issueId: createTestIssue("Concurrent Template Issue"),
+            issueTitle: "Parallel lane",
+            issueExternalId: "ENG-7",
+            agentType: "codex",
+            targetBranch: "main",
+            repoPath: gitRepoPath,
+          })
+        )
+      );
+
+      expect(results.map((r) => checkedOutBranch(r.worktreePath)).sort()).toEqual([
+        "team/eng-7-parallel-lane",
+        "team/eng-7-parallel-lane-2",
+        "team/eng-7-parallel-lane-3",
+      ]);
+      for (const result of results) {
+        await service.cleanupExecution(result.execution.id);
+      }
+    });
+
+    it("suffixes a workflow branch that already exists", async () => {
+      const service = new ExecutionLifecycleService(
+        db,
+        gitRepoPath,
+        new WorktreeManager({ ...DEFAULT_WORKTREE_CONFIG, branchPrefix: "team" })
+      );
+      const create = (workflowId: string) =>
+        service.createWorkflowWorktree({
+          workflowId,
+          workflowTitle: "Shared Title",
+          baseBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+      const first = await create("wf-abcd1234");
+      const second = await create("wf-abcd1234-again");
+
+      expect(checkedOutBranch(first.worktreePath)).toBe("team/workflow/abcd1234/shared-title");
+      expect(checkedOutBranch(second.worktreePath)).toBe("team/workflow/abcd1234/shared-title-2");
+      for (const worktree of [first, second]) {
+        await new WorktreeManager(DEFAULT_WORKTREE_CONFIG).cleanupWorktree(
+          worktree.worktreePath,
+          gitRepoPath
+        );
+      }
+    });
+
+    it("rejects a rendered name git does not accept, naming the template", async () => {
+      const create = (branchTemplate: string) =>
+        new ExecutionLifecycleService(
+          db,
+          gitRepoPath,
+          new WorktreeManager({ ...DEFAULT_WORKTREE_CONFIG, branchTemplate })
+        ).createExecutionWithWorktree({
+          issueId: createTestIssue("Invalid Rendered Name"),
+          issueTitle: "Trailing dot",
+          agentType: "codex",
+          targetBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+      await expect(create("{prefix}/{title}.")).rejects.toThrow(
+        'worktree.branchTemplate "{prefix}/{title}." rendered "wt-sudocode/trailing-dot."'
+      );
+      await expect(create("{externalId}")).rejects.toThrow(
+        'worktree.branchTemplate "{externalId}" rendered ""'
+      );
+    });
+
+    it("fails config load naming an unknown token or a worktrunk template without {prefix}/", () => {
+      const projectRoot = fs.mkdtempSync(path.join(testDir, "template-config-"));
+      fs.mkdirSync(path.join(projectRoot, ".sudocode"));
+      const writeWorktree = (worktree: Record<string, string>) =>
+        fs.writeFileSync(
+          path.join(projectRoot, ".sudocode", "config.local.json"),
+          JSON.stringify({ worktree })
+        );
+
+      writeWorktree({ branchTemplate: "{prefix}/{ticket}-{title}" });
+      expect(() => loadWorktreeConfig(projectRoot)).toThrow(
+        "Invalid worktree.branchTemplate token {ticket}"
+      );
+
+      writeWorktree({ provider: "worktrunk", branchTemplate: "{externalId}-{title}" });
+      expect(() => loadWorktreeConfig(projectRoot)).toThrow('must start with "{prefix}/"');
+
+      writeWorktree({ branchTemplate: "{prefix}/{externalId}-{title}" });
+      expect(loadWorktreeConfig(projectRoot).config.branchTemplate).toBe(
+        "{prefix}/{externalId}-{title}"
+      );
+    });
+
+    it.skipIf(!hasWorktrunk)(
+      "recognizes a templated worktrunk worktree as managed",
+      async () => {
+        const config: WorktreeConfig = {
+          ...DEFAULT_WORKTREE_CONFIG,
+          provider: "worktrunk",
+          branchPrefix: "team",
+          branchTemplate: "{prefix}/{issueId}-{title}",
+        };
+        const worktreeManager = new WorktreeManager(config);
+        const service = new ExecutionLifecycleService(db, gitRepoPath, worktreeManager);
+        const issueId = createTestIssue("Worktrunk Template");
+
+        const result = await service.createExecutionWithWorktree({
+          issueId,
+          issueTitle: "Worktrunk template",
+          agentType: "cursor",
+          targetBranch: "main",
+          repoPath: gitRepoPath,
+        });
+
+        const expected = `team/${issueId}-worktrunk-template`;
+        expect(checkedOutBranch(result.worktreePath)).toBe(expected);
+        const listed = (await worktreeManager.listWorktrees(gitRepoPath)).find(
+          (worktree) => worktree.branch === expected
+        );
+        expect(listed && isManagedWorktree(config, listed)).toBe(true);
+
+        await service.cleanupExecution(result.execution.id);
+        expect(fs.existsSync(result.worktreePath)).toBe(false);
+      }
+    );
   });
 });
 

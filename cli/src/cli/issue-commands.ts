@@ -22,7 +22,7 @@ import {
 import { getTags, setTags } from "../operations/tags.js";
 import { listFeedback } from "../operations/feedback.js";
 import { exportToJSONL } from "../export.js";
-import { syncJSONLToMarkdown } from "../sync.js";
+import { syncJSONLToMarkdown, syncEntityMetadataToMarkdown, assertSynced } from "../sync.js";
 import { generateUniqueFilename, findExistingEntityFile, syncFileWithRename } from "../filename-generator.js";
 import {
   isValidIssueStatus,
@@ -79,7 +79,7 @@ export async function handleIssueCreate(
     // Generate filename using unified scheme: {id}_{title_slug}.md
     const fileName = generateUniqueFilename(title, issueId);
     const mdPath = path.join(issuesDir, fileName);
-    await syncJSONLToMarkdown(ctx.db, issueId, 'issue', mdPath);
+    assertSynced(await syncJSONLToMarkdown(ctx.db, issueId, 'issue', mdPath));
 
     if (ctx.jsonOutput) {
       console.log(
@@ -346,7 +346,7 @@ export async function handleIssueUpdate(
     if (options.priority) updates.priority = parseInt(options.priority);
     if (options.assignee) updates.assignee = options.assignee;
     if (options.title) updates.title = options.title;
-    if (options.description) updates.content = options.description;
+    if (options.description !== undefined) updates.content = options.description;
     if (options.parent) updates.parent_id = options.parent;
     if (options.archived !== undefined) {
       updates.archived = options.archived === 'true';
@@ -362,7 +362,11 @@ export async function handleIssueUpdate(
 
     // Find existing file, rename if title changed, or generate new filename
     const mdPath = syncFileWithRename(id, issuesDir, issue.title);
-    await syncJSONLToMarkdown(ctx.db, id, 'issue', mdPath);
+    const writeMarkdown =
+      options.description === undefined
+        ? syncEntityMetadataToMarkdown
+        : syncJSONLToMarkdown;
+    assertSynced(await writeMarkdown(ctx.db, id, 'issue', mdPath));
 
     if (ctx.jsonOutput) {
       console.log(JSON.stringify(issue, null, 2));
@@ -427,7 +431,7 @@ export async function handleIssueClose(
         // Find existing file, rename if title changed, or generate new filename
         const issue = getIssue(ctx.db, result.id);
         const mdPath = syncFileWithRename(result.id, issuesDir, issue?.title || result.id);
-        await syncJSONLToMarkdown(ctx.db, result.id, 'issue', mdPath);
+        assertSynced(await syncEntityMetadataToMarkdown(ctx.db, result.id, 'issue', mdPath));
       }
     }
 

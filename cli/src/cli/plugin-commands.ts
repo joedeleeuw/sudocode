@@ -38,7 +38,7 @@ async function isPackageInstalled(packageName: string): Promise<boolean> {
  * List available plugins
  */
 export async function handlePluginList(
-  ctx: CommandContext,
+  ctx: Pick<CommandContext, "jsonOutput">,
   _options: { all?: boolean }
 ): Promise<void> {
   const firstPartyPlugins = getFirstPartyPlugins();
@@ -81,7 +81,7 @@ export interface PluginInstallOptions {
  * Install a plugin
  */
 export async function handlePluginInstall(
-  ctx: CommandContext,
+  ctx: Pick<CommandContext, "jsonOutput">,
   pluginName: string,
   options: PluginInstallOptions
 ): Promise<void> {
@@ -207,7 +207,9 @@ export async function handlePluginInstall(
 /**
  * Show status of configured plugins
  */
-export async function handlePluginStatus(ctx: CommandContext): Promise<void> {
+export async function handlePluginStatus(
+  ctx: Pick<CommandContext, "jsonOutput">
+): Promise<void> {
   const firstPartyPlugins = getFirstPartyPlugins();
 
   const statuses = await Promise.all(
@@ -276,7 +278,7 @@ export async function handlePluginStatus(ctx: CommandContext): Promise<void> {
  * Uninstall a plugin
  */
 export async function handlePluginUninstall(
-  ctx: CommandContext,
+  ctx: Pick<CommandContext, "jsonOutput">,
   pluginName: string,
   options: { global?: boolean }
 ): Promise<void> {

@@ -13,19 +13,29 @@
 
 import { AgentFactory } from "acp-factory";
 import type { PermissionMode, McpServer } from "acp-factory";
+import type { CodexConfig } from "@sudocode-ai/types/agents";
 import type { SudocodeMcpServersConfig } from "./acp-executor-wrapper.js";
+import { AgentConfigValidationError } from "../../errors/agent-errors.js";
+
+/**
+ * Codex options in the raw config (the frontend sends them in agentConfig)
+ */
+type CodexOptions = Pick<
+  CodexConfig,
+  "fullAuto" | "sandbox" | "askForApproval" | "configOverrides"
+>;
 
 /**
  * Raw agent configuration from the frontend/API
  */
-export interface RawAgentConfig {
+export interface RawAgentConfig extends CodexOptions {
   model?: string;
   env?: Record<string, string>;
   mode?: string;
   dangerouslySkipPermissions?: boolean;
   permissionMode?: string;
   mcpServers?: SudocodeMcpServersConfig | McpServer[];
-  agentConfig?: {
+  agentConfig?: CodexOptions & {
     model?: string;
     env?: Record<string, string>;
     mode?: string;
@@ -81,6 +91,14 @@ export interface AgentConfigHandler {
     rawConfig: RawAgentConfig,
     context: AgentConfigContext
   ): ProcessedAgentConfig;
+
+  /**
+   * Reject config this agent cannot launch with. Runs when an execution is
+   * requested, before its record or worktree exists.
+   *
+   * @throws AgentConfigValidationError
+   */
+  checkConfig?(rawConfig: RawAgentConfig): void;
 
   /**
    * Apply any agent-specific setup (e.g., dynamic registration)
@@ -271,41 +289,45 @@ export const geminiHandler: AgentConfigHandler = {
 // =============================================================================
 
 /**
- * Codex-specific configuration options from frontend
- */
-interface CodexSpecificConfig {
-  fullAuto?: boolean;
-  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
-  askForApproval?: "untrusted" | "on-failure" | "on-request" | "never";
-}
-
-/**
  * Configuration handler for OpenAI Codex agent
  *
  * Handles:
- * - OPENAI_MODEL environment variable
- * - Dynamic CLI registration with sandbox and approval flags
+ * - Dynamic CLI registration of codex-acp with `-c` config overrides for
+ *   approval_policy, sandbox_mode and model, then the user's configOverrides
  * - fullAuto mode (convenience alias for workspace-write + on-request)
  */
 export const codexHandler: AgentConfigHandler = {
+  checkConfig(rawConfig: RawAgentConfig): void {
+    const configOverrides: unknown = (rawConfig.agentConfig || rawConfig)
+      .configOverrides;
+    if (configOverrides === undefined) return;
+    const entries =
+      typeof configOverrides === "object" &&
+      configOverrides !== null &&
+      !Array.isArray(configOverrides)
+        ? Object.entries(configOverrides)
+        : null;
+    const invalid =
+      entries === null
+        ? ["configOverrides must be an object of key to string value"]
+        : entries
+            .filter(
+              ([key, value]) =>
+                key === "" || key.includes("=") || typeof value !== "string"
+            )
+            .map(
+              ([key]) =>
+                `configOverrides[${JSON.stringify(key)}] must be a string, under a non-empty key without "="`
+            );
+    if (invalid.length > 0) {
+      throw new AgentConfigValidationError("codex", invalid);
+    }
+  },
+
   processConfig(
     rawConfig: RawAgentConfig,
     _context: AgentConfigContext
   ): ProcessedAgentConfig {
-    // Build model environment variable
-    const modelEnvVars: Record<string, string> = {};
-    const model = rawConfig.model || rawConfig.agentConfig?.model;
-    if (model) {
-      modelEnvVars.OPENAI_MODEL = model;
-    }
-
-    // Merge environment variables
-    const existingEnv = rawConfig.env || rawConfig.agentConfig?.env;
-    const env =
-      Object.keys(modelEnvVars).length > 0 || existingEnv
-        ? { ...modelEnvVars, ...existingEnv }
-        : undefined;
-
     // Check for dangerouslySkipPermissions toggle
     const dangerouslySkipPermissions =
       rawConfig.dangerouslySkipPermissions === true ||
@@ -315,7 +337,7 @@ export const codexHandler: AgentConfigHandler = {
     const sessionMode = rawConfig.mode || rawConfig.agentConfig?.mode;
 
     return {
-      env,
+      env: rawConfig.env || rawConfig.agentConfig?.env,
       acpPermissionMode: dangerouslySkipPermissions
         ? "auto-approve"
         : "interactive",
@@ -330,10 +352,8 @@ export const codexHandler: AgentConfigHandler = {
     processedConfig: ProcessedAgentConfig,
     _context: AgentConfigContext
   ): void {
-    // Codex ACP uses -c config overrides
-    // Get Codex-specific options from the raw config
-    const codexConfig = rawConfig as unknown as CodexSpecificConfig;
-    const args = ["@zed-industries/codex-acp"];
+    const codexConfig: CodexOptions = rawConfig.agentConfig || rawConfig;
+    const model = rawConfig.model || rawConfig.agentConfig?.model;
 
     // Determine approval policy
     // Priority: dangerouslySkipPermissions > fullAuto > askForApproval > default
@@ -359,13 +379,20 @@ export const codexHandler: AgentConfigHandler = {
       );
     }
 
-    // Add approval policy
-    args.push("-c", `ask_for_approval=${approvalPolicy}`);
-
-    // Add sandbox policy if specified
-    if (sandbox) {
-      args.push("-c", `sandbox=${sandbox}`);
-    }
+    // Codex config keys, then the user's overrides, which win on conflict
+    const settings: Record<string, string> = {
+      approval_policy: approvalPolicy,
+      ...(sandbox && { sandbox_mode: sandbox }),
+      ...(model && { model }),
+      ...codexConfig.configOverrides,
+    };
+    const args = [
+      "@zed-industries/codex-acp",
+      ...Object.entries(settings).flatMap(([key, value]) => [
+        "-c",
+        `${key}=${value}`,
+      ]),
+    ];
 
     AgentFactory.register("codex", {
       command: "npx",
@@ -510,6 +537,19 @@ const handlers: Record<string, AgentConfigHandler> = {
  */
 export function getAgentConfigHandler(agentType: string): AgentConfigHandler {
   return handlers[agentType] || defaultHandler;
+}
+
+/**
+ * Reject agent configuration the agent cannot launch with, before an
+ * execution record or worktree is created for it
+ *
+ * @throws AgentConfigValidationError
+ */
+export function checkAgentConfig(
+  agentType: string,
+  rawConfig: RawAgentConfig
+): void {
+  getAgentConfigHandler(agentType).checkConfig?.(rawConfig);
 }
 
 /**

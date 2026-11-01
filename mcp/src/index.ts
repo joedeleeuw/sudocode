@@ -82,7 +82,7 @@ Usage: sudocode-mcp [options]
 Options:
   -w, --working-dir <path>  Working directory (default: cwd or SUDOCODE_WORKING_DIR)
   --cli-path <path>         Path to sudocode CLI (default: 'sudocode' or SUDOCODE_PATH)
-  --db-path <path>          Database path (default: auto-discover or SUDOCODE_DB)
+  --db-path <path>          Database path (default: SUDOCODE_DB, else the project at the git repository root)
   --no-sync                 Skip initial sync on startup (default: sync enabled)
   -s, --scope <scopes>      Comma-separated list of scopes to enable (default: "default")
   --server-url <url>        Local server URL for extended tools (required if scope != default)

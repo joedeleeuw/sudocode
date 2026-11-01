@@ -189,7 +189,7 @@ export function CodexConfigForm({ config, onChange }: CodexConfigFormProps) {
             Full Auto Mode
           </Label>
           <p className="text-[10px] text-muted-foreground">
-            Workspace write + auto-approve on failure
+            Workspace write + approval on request
           </p>
         </div>
         <Switch

@@ -3,6 +3,9 @@
  */
 
 import matter from "gray-matter";
+// gray-matter serves a parse from a module-level cache when called without
+// options; that cache treats inherited object keys ("constructor") as hits and
+// keeps a parse that threw. Every parse here passes options so none is cached.
 import * as fs from "fs";
 import type Database from "better-sqlite3";
 import { findEntity } from "./operations/entities.js";
@@ -72,7 +75,7 @@ export function parseMarkdown<T extends object = Record<string, any>>(
   db?: Database.Database,
   outputDir?: string
 ): ParsedMarkdown<T> {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
 
   // Extract cross-references from content
   const references = extractCrossReferences(parsed.content, db);
@@ -207,7 +210,25 @@ export function stringifyMarkdown<T extends object = Record<string, any>>(
   data: T,
   content: string
 ): string {
-  return matter.stringify(content, data);
+  return matter.stringify({ content }, data);
+}
+
+function frontmatterBlock<T extends object>(data: T): string {
+  const serialized = matter.stringify({ content: "" }, data);
+  return serialized.slice(0, serialized.lastIndexOf("---") + 3) + "\n";
+}
+
+/**
+ * Replace the frontmatter of a markdown document and keep the body exactly as
+ * gray-matter reads it, so a metadata write never changes what a later parse
+ * returns as content. The body boundary comes from the same parser that reads
+ * the file; this module owns no second frontmatter grammar.
+ */
+export function replaceFrontmatter<T extends object = Record<string, any>>(
+  raw: string,
+  data: T
+): string {
+  return frontmatterBlock(data) + matter(raw, {}).content;
 }
 
 /**
@@ -218,7 +239,7 @@ export function updateFrontmatter<T extends object = Record<string, any>>(
   originalContent: string,
   updates: Partial<T>
 ): string {
-  const parsed = matter(originalContent);
+  const parsed = matter(originalContent, {});
 
   // Merge updates into existing frontmatter
   const merged = {
@@ -279,7 +300,7 @@ export function writeMarkdownFile<T extends object = Record<string, any>>(
  * Remove frontmatter from markdown content
  */
 export function removeFrontmatter(content: string): string {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
   return parsed.content;
 }
 
@@ -289,7 +310,7 @@ export function removeFrontmatter(content: string): string {
 export function getFrontmatter<T extends object = Record<string, any>>(
   content: string
 ): T {
-  const parsed = matter(content);
+  const parsed = matter(content, {});
   return parsed.data as T;
 }
 

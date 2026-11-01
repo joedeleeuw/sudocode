@@ -178,13 +178,15 @@ function validateSupersession(
 }
 
 /**
- * Add a relationship between entities
+ * Add a validated relationship row without status effects. Markdown ingestion
+ * records the edges a file declares exactly as written; the blocked status
+ * that a `blocks` or `depends-on` edge implies is applied only by the explicit
+ * relationship command (addRelationship).
  */
-export function addRelationship(
+export function addRelationshipRow(
   db: Database.Database,
   input: CreateRelationshipInput
 ): Relationship {
-  // Validate relationship type
   if (!isValidRelationshipType(input.relationship_type)) {
     throw new Error(
       `Invalid relationship type: ${input.relationship_type}. Valid types: ${getValidRelationshipTypes().join(", ")}`
@@ -203,7 +205,6 @@ export function addRelationship(
 
   validateSupersession(db, input, fromEntity, toEntity);
 
-  // Check if relationship already exists
   const existing = getRelationship(
     db,
     input.from_id,
@@ -212,7 +213,6 @@ export function addRelationship(
     input.to_type,
     input.relationship_type
   );
-
   if (existing) {
     return existing;
   }
@@ -228,32 +228,49 @@ export function addRelationship(
       relationship_type: input.relationship_type,
       metadata: input.metadata,
     });
-
-    const rel = getRelationship(
-      db,
-      input.from_id,
-      input.from_type,
-      input.to_id,
-      input.to_type,
-      input.relationship_type
-    );
-
-    if (!rel) {
-      throw new Error("Failed to create relationship");
-    }
-
-    const pair = blockingPair(input);
-    if (pair) {
-      autoUpdateBlockedStatusOnAdd(db, pair.blockedId, pair.blockerId);
-    }
-
-    return rel;
   } catch (error: any) {
     if (error.code && error.code.startsWith("SQLITE_CONSTRAINT")) {
       throw new RelationshipExistsError(input);
     }
     throw error;
   }
+
+  const rel = getRelationship(
+    db,
+    input.from_id,
+    input.from_type,
+    input.to_id,
+    input.to_type,
+    input.relationship_type
+  );
+  if (!rel) {
+    throw new Error("Failed to create relationship");
+  }
+  return rel;
+}
+
+/**
+ * Add a relationship between entities, then mark the blocked issue blocked
+ * when a new `blocks` or `depends-on` edge has an open blocker
+ */
+export function addRelationship(
+  db: Database.Database,
+  input: CreateRelationshipInput
+): Relationship {
+  const existed = getRelationship(
+    db,
+    input.from_id,
+    input.from_type,
+    input.to_id,
+    input.to_type,
+    input.relationship_type
+  );
+  const rel = addRelationshipRow(db, input);
+  const pair = existed ? null : blockingPair(input);
+  if (pair) {
+    autoUpdateBlockedStatusOnAdd(db, pair.blockedId, pair.blockerId);
+  }
+  return rel;
 }
 
 /**

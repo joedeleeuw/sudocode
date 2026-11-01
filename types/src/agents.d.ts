@@ -208,7 +208,7 @@ export interface CodexConfig extends BaseAgentConfig {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Approval policy */
   askForApproval?: "untrusted" | "on-failure" | "on-request" | "never";
-  /** Shortcut combining workspace-write sandbox + on-failure approvals */
+  /** Shortcut combining workspace-write sandbox + on-request approvals */
   fullAuto?: boolean;
   /** Allow execution outside Git repositories */
   skipGitRepoCheck?: boolean;
@@ -224,6 +224,15 @@ export interface CodexConfig extends BaseAgentConfig {
   addDir?: string[];
   /** Disable all safety checks (isolated environments only) */
   yolo?: boolean;
+  /**
+   * Codex config.toml overrides, each passed as `-c key=value` in insertion
+   * order, e.g. `{ "model_reasoning_effort": "high",
+   * "sandbox_workspace_write.writable_roots": "[\"/repo/.git\"]" }`.
+   * Keys are dotted config paths; values are parsed by Codex as TOML, or
+   * used as literal strings when they are not valid TOML. Applied after,
+   * and so taking precedence over, `model`, `sandbox` and `askForApproval`.
+   */
+  configOverrides?: Record<string, string>;
   /** Maximum idle time before cleanup */
   idleTimeout?: number;
   /** Retry configuration for failed spawns */

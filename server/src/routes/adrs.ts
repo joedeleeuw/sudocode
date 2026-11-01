@@ -13,6 +13,7 @@ import {
 import {
   executeExportNow,
   syncEntityToMarkdown,
+  syncEntityMetadataToMarkdown,
   triggerExport,
 } from "../services/export.js";
 import { broadcastAdrUpdate } from "../services/websocket.js";
@@ -32,12 +33,13 @@ function optionalNumber(value: unknown): number | undefined {
 function syncAdr(
   request: Request,
   id: string,
-  action: "created" | "updated" | "deleted"
+  action: "created" | "updated" | "deleted",
+  writeMarkdown: typeof syncEntityToMarkdown = syncEntityToMarkdown
 ): void {
   const project = request.project!;
   triggerExport(project.db, project.sudocodeDir);
   if (action !== "deleted") {
-    syncEntityToMarkdown(project.db, id, "adr", project.sudocodeDir).catch(
+    writeMarkdown(project.db, id, "adr", project.sudocodeDir).catch(
       (error) => console.error(`Failed to sync ADR ${id} to markdown:`, error)
     );
   }
@@ -161,7 +163,12 @@ export function createAdrsRouter(): Router {
       const input: UpdateAdrInput = { title, content, archived };
       const adr = updateExistingAdr(req.project!.db, req.params.id, input);
       await executeExportNow(req.project!.db, req.project!.sudocodeDir);
-      syncAdr(req, req.params.id, "updated");
+      syncAdr(
+        req,
+        req.params.id,
+        "updated",
+        content === undefined ? syncEntityMetadataToMarkdown : syncEntityToMarkdown
+      );
       res.json({ success: true, data: adr });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

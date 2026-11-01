@@ -243,6 +243,49 @@ describe('Spec Operations', () => {
 
       expect(updated.parent_id).toBe('spec-001');
     });
+
+    it('should set parent_uuid when parent_id is assigned by an update', () => {
+      const parent = createSpec(db, {
+        id: 'spec-001',
+        title: 'Parent Spec',
+        file_path: 'parent.md',
+      });
+
+      // Simulates import's first pass, which creates specs without parents
+      createSpec(db, {
+        id: 'spec-002',
+        title: 'Child Spec',
+        file_path: 'child.md',
+      });
+
+      const updated = updateSpec(db, 'spec-002', {
+        parent_id: 'spec-001',
+      });
+
+      expect(updated.parent_id).toBe('spec-001');
+      expect(updated.parent_uuid).toBe(parent.uuid);
+    });
+
+    it('should clear parent_uuid when parent_id is removed', () => {
+      createSpec(db, {
+        id: 'spec-001',
+        title: 'Parent Spec',
+        file_path: 'parent.md',
+      });
+      createSpec(db, {
+        id: 'spec-002',
+        title: 'Child Spec',
+        file_path: 'child.md',
+        parent_id: 'spec-001',
+      });
+
+      const updated = updateSpec(db, 'spec-002', {
+        parent_id: null as unknown as string,
+      });
+
+      expect(updated.parent_id).toBeNull();
+      expect(updated.parent_uuid).toBeNull();
+    });
   });
 
   describe('deleteSpec', () => {

@@ -215,12 +215,14 @@ export function updateSpec(
     throw new Error(`Spec not found: ${id}`);
   }
 
-  // Validate parent_id exists if provided
+  // Validate parent_id exists if provided and resolve its uuid
+  let parent_uuid: string | null = null;
   if (input.parent_id) {
     const parent = getSpec(db, input.parent_id);
     if (!parent) {
       throw new Error(`Parent spec not found: ${input.parent_id}`);
     }
+    parent_uuid = parent.uuid;
   }
 
   const updates: string[] = [];
@@ -242,9 +244,18 @@ export function updateSpec(
     updates.push("priority = @priority");
     params.priority = input.priority;
   }
-  if (input.parent_id !== undefined && input.parent_id !== existing.parent_id) {
-    updates.push("parent_id = @parent_id");
-    params.parent_id = input.parent_id;
+  if (input.parent_id !== undefined) {
+    if (input.parent_id !== existing.parent_id) {
+      updates.push("parent_id = @parent_id");
+      params.parent_id = input.parent_id;
+    }
+    // parent_uuid has one source, parent_id: whenever a parent_id is
+    // supplied, store its parent's uuid (null when the parent is removed).
+    const nextParentUuid = input.parent_id ? parent_uuid : null;
+    if (nextParentUuid !== (existing.parent_uuid ?? null)) {
+      updates.push("parent_uuid = @parent_uuid");
+      params.parent_uuid = nextParentUuid;
+    }
   }
   if (input.archived !== undefined && input.archived !== existing.archived) {
     updates.push("archived = @archived");

@@ -266,10 +266,22 @@ export interface RelationshipJSONL {
 }
 
 /**
+ * Who creates and removes execution worktrees.
+ * - "git": sudocode runs `git worktree add` under `worktreeStoragePath`
+ * - "worktrunk": sudocode runs `wt switch --create … --no-cd` and `wt remove`,
+ *   so worktrees follow the user's worktrunk `worktree-path` layout (by default
+ *   sibling `<repo>.<branch>` directories) and the repo's worktrunk hooks run
+ */
+export type WorktreeProvider = "git" | "worktrunk";
+
+/**
  * Worktree configuration for session isolation
+ * (the `worktree` section of `.sudocode/config.local.json`)
  */
 export interface WorktreeConfig {
-  /** Where to store worktrees (default: ".sudocode/worktrees") */
+  /** Who creates and removes worktrees (default: "worktrunk") */
+  provider: WorktreeProvider;
+  /** Where to store worktrees with the "git" provider (default: ".sudocode/worktrees") */
   worktreeStoragePath: string;
   /** Auto-create branches for new sessions (default: true) */
   autoCreateBranches: boolean;
@@ -279,9 +291,28 @@ export interface WorktreeConfig {
   enableSparseCheckout: boolean;
   /** Patterns for sparse-checkout (optional) */
   sparseCheckoutPatterns?: string[];
-  /** Branch naming prefix (default: "sudocode") */
+  /** Branch naming prefix (default: "wt-sudocode"; `sudocode init` writes "sudocode") */
   branchPrefix: string;
-  /** Cleanup orphaned worktrees on server startup (default: true) */
+  /**
+   * Template for execution branch names (default: "{prefix}/{executionId}/{title}").
+   * Tokens:
+   * - `{prefix}`: `branchPrefix`
+   * - `{issueId}`: the issue's ID
+   * - `{externalId}`: the ID of the issue's first external link, slugified; empty without one
+   * - `{title}`: the issue title, slugified
+   * - `{executionId}`: the first 8 characters of the execution ID
+   *
+   * A token that renders empty is dropped together with one adjacent separator
+   * (`-`, `_`, `.` or `/`). When the rendered name is already a branch, or
+   * another execution in this server process is creating it in the same
+   * checkout, `-2`, `-3`, … is appended; a branch another process creates
+   * after that check fails execution creation. A rendered
+   * name git's ref rules reject fails execution creation. With the "worktrunk"
+   * provider the template must start with `{prefix}/`, which is how sudocode
+   * recognizes the worktrees it manages.
+   */
+  branchTemplate: string;
+  /** Cleanup orphaned worktrees on server startup (default: false) */
   cleanupOrphanedWorktreesOnStartup: boolean;
 }
 

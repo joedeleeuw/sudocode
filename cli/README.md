@@ -395,17 +395,17 @@ sudocode sync [options]
 
 # Export database to JSONL
 sudocode export [options]
-  -o, --output <dir>          Output directory (default: ".sudocode")
+  -o, --output <dir>          Output directory (default: the project's .sudocode)
 
 # Import JSONL to database
 sudocode import [options]
-  -i, --input <dir>           Input directory (default: ".sudocode")
+  -i, --input <dir>           Input directory (default: the project's .sudocode)
 ```
 
 ## Global Options
 
 ```bash
---db <path>                   Custom database path (auto-discovers by default)
+--db <path>                   Custom database path (default: .sudocode/cache.db at the git repository root)
 --json                        Output in JSON format
 ```
 

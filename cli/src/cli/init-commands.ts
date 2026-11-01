@@ -6,6 +6,7 @@ import chalk from "chalk";
 import * as fs from "fs";
 import * as path from "path";
 import { initDatabase } from "../db.js";
+import { repositoryRoot } from "../project.js";
 import type Database from "better-sqlite3";
 import { PROJECT_CONFIG_FILE, LOCAL_CONFIG_FILE, getProjectConfig } from "../config.js";
 import type { StorageMode } from "@sudocode-ai/types";
@@ -61,7 +62,8 @@ export function isInitialized(dir: string): boolean {
 export async function performInitialization(
   options: InitOptions = {}
 ): Promise<void> {
-  const dir = options.dir || path.join(process.cwd(), ".sudocode");
+  const dir =
+    options.dir ?? path.join(repositoryRoot(process.cwd()), ".sudocode");
   const jsonOutput = options.jsonOutput || false;
 
   // Create directory structure
@@ -107,14 +109,6 @@ export async function performInitialization(
   const localConfigPath = path.join(dir, LOCAL_CONFIG_FILE);
   if (!fs.existsSync(localConfigPath)) {
     const localConfig = {
-      worktree: {
-        worktreeStoragePath: ".sudocode/worktrees",
-        autoCreateBranches: true,
-        autoDeleteBranches: false,
-        enableSparseCheckout: false,
-        branchPrefix: "sudocode",
-        cleanupOrphanedWorktreesOnStartup: false,
-      },
       editor: {
         editorType: "vs-code",
       },

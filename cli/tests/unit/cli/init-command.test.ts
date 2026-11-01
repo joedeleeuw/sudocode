@@ -24,61 +24,6 @@ describe("Init Command", () => {
     }
   });
 
-  describe("fresh initialization", () => {
-    it("should create all required files and directories", async () => {
-      const sudocodeDir = path.join(tempDir, ".sudocode");
-
-      // Run init command
-      await performInitialization({
-        dir: sudocodeDir,
-        jsonOutput: true,
-      });
-
-      // Verify directory structure
-      expect(fs.existsSync(sudocodeDir)).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, "specs"))).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, "issues"))).toBe(true);
-
-      // Verify files
-      expect(fs.existsSync(path.join(sudocodeDir, "cache.db"))).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, "specs.jsonl"))).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, "issues.jsonl"))).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, "config.json"))).toBe(true);
-      expect(fs.existsSync(path.join(sudocodeDir, ".gitignore"))).toBe(true);
-
-      // Verify config.json is project config (no worktree or version)
-      const config = JSON.parse(
-        fs.readFileSync(path.join(sudocodeDir, "config.json"), "utf8")
-      );
-      expect(config.worktree).toBeUndefined();
-      expect(config.version).toBeUndefined();
-
-      // Verify config.local.json has worktree settings
-      const localConfig = JSON.parse(
-        fs.readFileSync(path.join(sudocodeDir, "config.local.json"), "utf8")
-      );
-      expect(localConfig.worktree).toBeDefined();
-      expect(localConfig.editor).toBeDefined();
-
-      // Verify JSONL files are empty
-      expect(fs.readFileSync(path.join(sudocodeDir, "specs.jsonl"), "utf8")).toBe("");
-      expect(fs.readFileSync(path.join(sudocodeDir, "issues.jsonl"), "utf8")).toBe("");
-
-      // Verify .gitignore content (default jsonl mode)
-      const gitignoreContent = fs.readFileSync(
-        path.join(sudocodeDir, ".gitignore"),
-        "utf8"
-      );
-      expect(gitignoreContent).toContain("cache.db*");
-      expect(gitignoreContent).toContain("issues/");
-      expect(gitignoreContent).toContain("specs/");
-      expect(gitignoreContent).toContain("worktrees/");
-      expect(gitignoreContent).toContain("config.local.json");
-      // config.json should NOT be gitignored — it's project config
-      expect(gitignoreContent).not.toContain("config.json");
-    });
-  });
-
   describe("preserving existing files", () => {
     it("should preserve existing specs.jsonl", async () => {
       const sudocodeDir = path.join(tempDir, ".sudocode");

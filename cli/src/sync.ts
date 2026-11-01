@@ -7,6 +7,7 @@ import * as path from "path";
 import type Database from "better-sqlite3";
 import {
   parseMarkdownFile,
+  replaceFrontmatter,
   updateFrontmatterFile,
   writeMarkdownFile,
 } from "./markdown.js";
@@ -17,7 +18,7 @@ import {
   createSpec,
   updateSpec,
 } from "./operations/specs.js";
-import { getIssue, createIssue, updateIssue } from "./operations/issues.js";
+import { getIssue, createIssue, updateIssueRow } from "./operations/issues.js";
 import {
   getAdr,
   getAdrByFilePath,
@@ -25,7 +26,7 @@ import {
   updateAdr,
 } from "./operations/adrs.js";
 import { getEntity } from "./operations/entities.js";
-import { addRelationship } from "./operations/relationships.js";
+import { addRelationshipRow } from "./operations/relationships.js";
 import { getTags, setTags } from "./operations/tags.js";
 import { listFeedback, updateFeedback } from "./operations/feedback.js";
 import { relocateFeedbackAnchor } from "./operations/feedback-anchors.js";
@@ -378,9 +379,52 @@ export async function syncMarkdownToJSONL(
   }
 }
 
+type EntityFrontmatter = {
+  entity: Spec | Issue | Adr;
+  frontmatter: ReturnType<typeof entityToFrontmatter>;
+};
+
+async function loadEntityFrontmatter(
+  db: Database.Database,
+  entityId: string,
+  entityType: EntityType
+): Promise<EntityFrontmatter | null> {
+  const entity = getEntity(db, entityId, entityType);
+  if (!entity) {
+    return null;
+  }
+  const { getOutgoingRelationships } = await import(
+    "./operations/relationships.js"
+  );
+  const relationships = getOutgoingRelationships(db, entityId, entityType);
+  const tags = getTags(db, entityId, entityType);
+  return {
+    entity,
+    frontmatter: entityToFrontmatter(entity, entityType, relationships, tags),
+  };
+}
+
+function entityNotFound(
+  entityId: string,
+  entityType: EntityType
+): MarkdownSyncResult {
+  return {
+    success: false,
+    action: "no-change",
+    entityId,
+    entityType,
+    error: `${entityType} not found: ${entityId}`,
+  };
+}
+
 /**
  * Sync from JSONL/SQLite to markdown file
- * Writes full content (frontmatter + body) from database to markdown
+ * Writes full content (frontmatter + body) from database to markdown.
+ * Only for callers that changed the body in the database, or whose sync
+ * direction established the database as the owner of the body (bulk sync,
+ * watcher). A command that changed only metadata (a relationship, status,
+ * priority, parent, tags) uses syncEntityMetadataToMarkdown, which keeps the
+ * body the file already holds.
  */
 export async function syncJSONLToMarkdown(
   db: Database.Database,
@@ -389,42 +433,69 @@ export async function syncJSONLToMarkdown(
   mdPath: string
 ): Promise<MarkdownSyncResult> {
   try {
-    const entity = getEntity(db, entityId, entityType);
-
-    if (!entity) {
-      return {
-        success: false,
-        action: "no-change",
-        entityId,
-        entityType,
-        error: `${entityType} not found: ${entityId}`,
-      };
+    const loaded = await loadEntityFrontmatter(db, entityId, entityType);
+    if (!loaded) {
+      return entityNotFound(entityId, entityType);
     }
-
-    // Get relationships and tags
-    const { getOutgoingRelationships } = await import(
-      "./operations/relationships.js"
-    );
-    const relationships = getOutgoingRelationships(db, entityId, entityType);
-    const tags = getTags(db, entityId, entityType);
-
-    // Build frontmatter
-    const frontmatter = entityToFrontmatter(
-      entity,
-      entityType,
-      relationships,
-      tags
-    );
-
-    // Check if file exists (for action reporting)
     const fileExists = fs.existsSync(mdPath);
+    writeMarkdownFile(mdPath, loaded.frontmatter, loaded.entity.content || "");
+    return {
+      success: true,
+      action: fileExists ? "updated" : "created",
+      entityId,
+      entityType,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      action: "no-change",
+      entityId,
+      entityType,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
-    // Write full content (frontmatter + body) from database
-    // When this function is called, sync direction has already determined
-    // that database is the source of truth, so we write everything
-    const content = entity.content || "";
-    writeMarkdownFile(mdPath, frontmatter, content);
+/**
+ * A markdown write that did not happen is an error for the command that asked
+ * for it, never a silent success.
+ */
+export function assertSynced(result: MarkdownSyncResult): void {
+  if (!result.success) {
+    throw new Error(
+      `markdown not updated for ${result.entityType} ${result.entityId}: ${result.error}`
+    );
+  }
+}
 
+/**
+ * Rewrite only the frontmatter of an entity's markdown file from the database,
+ * keeping the body the file already holds. A metadata change in the database
+ * (a relationship, status, priority, parent, tags) never discards an edit to
+ * the body that the database has not imported yet. When the file does not
+ * exist, the body is the database content.
+ */
+export async function syncEntityMetadataToMarkdown(
+  db: Database.Database,
+  entityId: string,
+  entityType: EntityType,
+  mdPath: string
+): Promise<MarkdownSyncResult> {
+  try {
+    const loaded = await loadEntityFrontmatter(db, entityId, entityType);
+    if (!loaded) {
+      return entityNotFound(entityId, entityType);
+    }
+    const fileExists = fs.existsSync(mdPath);
+    if (fileExists) {
+      fs.writeFileSync(
+        mdPath,
+        replaceFrontmatter(fs.readFileSync(mdPath, "utf8"), loaded.frontmatter),
+        "utf8"
+      );
+    } else {
+      writeMarkdownFile(mdPath, loaded.frontmatter, loaded.entity.content || "");
+    }
     return {
       success: true,
       action: fileExists ? "updated" : "created",
@@ -582,7 +653,7 @@ async function syncIssue(
 
     // Only update timestamp if content actually changed
     // Note: external_links is handled separately via JSONL import, not markdown sync
-    updateIssue(db, id, {
+    updateIssueRow(db, id, {
       ...issueData,
       ...(contentChanged && fileModTime ? { updated_at: fileModTime } : {}),
     } as any);
@@ -642,7 +713,7 @@ async function syncRelationships(
       if (!isValidRelationshipType(relType)) {
         throw new Error(`Invalid relationship type in ${entityId}: ${relType}`);
       }
-      addRelationship(db, {
+      addRelationshipRow(db, {
         from_id: entityId,
         from_type: entityType,
         to_id: ref.id,
@@ -673,7 +744,7 @@ async function syncRelationships(
 
       const key = `${rel.relationship_type}:${targetType}:${toId}`;
       if (!existingSet.has(key)) {
-        addRelationship(db, {
+        addRelationshipRow(db, {
           from_id: entityId,
           from_type: entityType,
           to_id: toId,

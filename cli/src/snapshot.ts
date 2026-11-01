@@ -22,6 +22,7 @@ import {
   type EntitySnapshots,
 } from "@sudocode-ai/types/entities";
 import { decodeExternalLinks } from "./external-links.js";
+import { digestJSONLContent, type JSONLFileDigest } from "./jsonl-sync-state.js";
 import {
   getValidAnchorStatuses,
   isValidAnchorStatus,
@@ -633,18 +634,25 @@ export function inferSnapshotEntityType(
   return null;
 }
 
+function readSnapshotFile<K extends EntityType>(
+  filePath: string,
+  entityType: K,
+  feedbackIds: Set<string>
+): { entities: EntitySnapshot<K>[]; digest: JSONLFileDigest } {
+  if (!fs.existsSync(filePath)) missingSnapshotFile(filePath, entityType);
+  const content = fs.readFileSync(filePath, "utf8");
+  return {
+    entities: decodeSnapshotContent(filePath, entityType, content, feedbackIds),
+    digest: digestJSONLContent(filePath, content),
+  };
+}
+
 export function readEntitySnapshotFile<K extends EntityType>(
   filePath: string,
   entityType: K,
   feedbackIds = new Set<string>()
 ): EntitySnapshot<K>[] {
-  if (!fs.existsSync(filePath)) missingSnapshotFile(filePath, entityType);
-  return decodeSnapshotContent(
-    filePath,
-    entityType,
-    fs.readFileSync(filePath, "utf8"),
-    feedbackIds
-  );
+  return readSnapshotFile(filePath, entityType, feedbackIds).entities;
 }
 
 export type SnapshotFileNames = Partial<Record<EntityType, string>>;
@@ -657,14 +665,22 @@ export function snapshotFilePath(
   return path.join(inputDir, fileNames[entityType] ?? getEntityRow(entityType).jsonlFile);
 }
 
+export interface PersistedSnapshot {
+  entities: EntitySnapshots;
+  /** The digest of each file exactly as decoded into `entities` */
+  digests: JSONLFileDigest[];
+}
+
 export function readPersistedSnapshot(
   inputDir: string,
   fileNames: SnapshotFileNames = {}
-): EntitySnapshots {
+): PersistedSnapshot {
   const feedbackIds = new Set<string>();
+  const spec = readSnapshotFile(snapshotFilePath(inputDir, "spec", fileNames), "spec", feedbackIds);
+  const issue = readSnapshotFile(snapshotFilePath(inputDir, "issue", fileNames), "issue", feedbackIds);
+  const adr = readSnapshotFile(snapshotFilePath(inputDir, "adr", fileNames), "adr", feedbackIds);
   return {
-    spec: readEntitySnapshotFile(snapshotFilePath(inputDir, "spec", fileNames), "spec", feedbackIds),
-    issue: readEntitySnapshotFile(snapshotFilePath(inputDir, "issue", fileNames), "issue", feedbackIds),
-    adr: readEntitySnapshotFile(snapshotFilePath(inputDir, "adr", fileNames), "adr", feedbackIds),
+    entities: { spec: spec.entities, issue: issue.entities, adr: adr.entities },
+    digests: [spec.digest, issue.digest, adr.digest],
   };
 }

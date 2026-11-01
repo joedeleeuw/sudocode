@@ -174,6 +174,69 @@ describe("Issue Operations", () => {
 
       expect(updated.parent_id).toBe("issue-001");
     });
+
+    it("should set parent_uuid when parent_id is assigned by an update", () => {
+      const parent = createIssue(db, {
+        id: "issue-001",
+        title: "Parent Issue",
+      });
+
+      // Simulates import's first pass, which creates issues without parents
+      createIssue(db, {
+        id: "issue-002",
+        title: "Child Issue",
+      });
+
+      const updated = updateIssue(db, "issue-002", {
+        parent_id: "issue-001",
+      });
+
+      expect(updated.parent_id).toBe("issue-001");
+      expect(updated.parent_uuid).toBe(parent.uuid);
+    });
+
+    it("should update parent_uuid when the parent changes", () => {
+      const first = createIssue(db, {
+        id: "issue-001",
+        title: "First Parent",
+      });
+      const second = createIssue(db, {
+        id: "issue-002",
+        title: "Second Parent",
+      });
+      createIssue(db, {
+        id: "issue-003",
+        title: "Child Issue",
+        parent_id: "issue-001",
+      });
+
+      const updated = updateIssue(db, "issue-003", {
+        parent_id: "issue-002",
+      });
+
+      expect(updated.parent_id).toBe("issue-002");
+      expect(updated.parent_uuid).toBe(second.uuid);
+      expect(updated.parent_uuid).not.toBe(first.uuid);
+    });
+
+    it("should clear parent_uuid when parent_id is removed", () => {
+      createIssue(db, {
+        id: "issue-001",
+        title: "Parent Issue",
+      });
+      createIssue(db, {
+        id: "issue-002",
+        title: "Child Issue",
+        parent_id: "issue-001",
+      });
+
+      const updated = updateIssue(db, "issue-002", {
+        parent_id: null as unknown as string,
+      });
+
+      expect(updated.parent_id).toBeNull();
+      expect(updated.parent_uuid).toBeNull();
+    });
   });
 
   describe("closeIssue and reopenIssue", () => {

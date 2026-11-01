@@ -1,15 +1,19 @@
 import type Database from "better-sqlite3";
-import type { RelationshipJSONL } from "./types.js";
+import type { IssueJSONL, IssueStatus, RelationshipJSONL } from "./types.js";
 import {
   ENTITY_ROWS,
   getEntityTypeFromId,
+  type EntitySnapshot,
   type EntitySnapshots,
+  type EntityType,
 } from "@sudocode-ai/types/entities";
 import {
-  addRelationship,
+  blockingPair,
+  deleteRelationshipRow,
   EntityNotFoundError,
+  insertRelationshipRow,
   listRelationships,
-  removeRelationship,
+  statusWithBlocker,
   validateSupersessionEdges,
 } from "./operations/relationships.js";
 import { normalizeMirrorPath } from "./snapshot.js";
@@ -27,16 +31,29 @@ export class ProposedGraphError extends Error {
   }
 }
 
-function entitySnapshotIds(snapshot: EntitySnapshots): Map<string, string> {
+type ProposedScope = Partial<EntitySnapshots>;
+
+interface ScopedEntity {
+  entityType: EntityType;
+  entity: EntitySnapshot;
+}
+
+function scopedEntities(scope: ProposedScope): ScopedEntity[] {
+  return ENTITY_ROWS.flatMap((row) => {
+    const entities: readonly EntitySnapshot[] | undefined = scope[row.type];
+    if (entities === undefined) return [];
+    return entities.map((entity) => ({ entityType: row.type, entity }));
+  });
+}
+
+function entitySnapshotIds(entities: readonly ScopedEntity[]): Map<string, string> {
   const ids = new Map<string, string>();
-  for (const row of ENTITY_ROWS) {
-    for (const entity of snapshot[row.type]) {
-      const key = `${row.type}:${entity.id}`;
-      if (ids.has(key)) {
-        throw new ProposedGraphError(`Duplicate ${row.type} ID ${entity.id} in proposed snapshot`);
-      }
-      ids.set(key, entity.uuid);
+  for (const { entityType, entity } of entities) {
+    const key = `${entityType}:${entity.id}`;
+    if (ids.has(key)) {
+      throw new ProposedGraphError(`Duplicate ${entityType} ID ${entity.id} in proposed snapshot`);
     }
+    ids.set(key, entity.uuid);
   }
   return ids;
 }
@@ -45,80 +62,64 @@ function failUnless(condition: boolean, message: string): void {
   if (!condition) throw new ProposedGraphError(message);
 }
 
-function proposedRelationships(snapshot: EntitySnapshots): ProposedRelationship[] {
-  const ids = entitySnapshotIds(snapshot);
+function proposedRelationships(scope: ProposedScope): ProposedRelationship[] {
+  const entities = scopedEntities(scope);
+  const ids = entitySnapshotIds(entities);
+  const endpointUuid = (entityType: EntityType, id: string): string | null => {
+    if (scope[entityType] === undefined) return null;
+    const uuid = ids.get(`${entityType}:${id}`);
+    if (uuid === undefined) throw new EntityNotFoundError(entityType, id);
+    return uuid;
+  };
   const uuidSets = new Set<string>();
-  for (const row of ENTITY_ROWS) {
-    for (const entity of snapshot[row.type]) {
-      failUnless(!uuidSets.has(entity.uuid), `Duplicate entity UUID ${entity.uuid}`);
-      uuidSets.add(entity.uuid);
-    }
+  for (const { entity } of entities) {
+    failUnless(!uuidSets.has(entity.uuid), `Duplicate entity UUID ${entity.uuid}`);
+    uuidSets.add(entity.uuid);
   }
   const paths = new Map<string, string>();
-  for (const row of ENTITY_ROWS) {
-    if (row.type === "issue") continue;
-    for (const entity of snapshot[row.type]) {
-      const normalizedPath = normalizeMirrorPath(entity.file_path, row.type);
-      const owner = paths.get(normalizedPath);
-      failUnless(
-        owner === undefined || owner === entity.uuid,
-        `Markdown path ${normalizedPath} is owned by multiple UUIDs`
-      );
-      paths.set(normalizedPath, entity.uuid);
-    }
+  for (const { entityType, entity } of entities) {
+    if (entityType === "issue" || !("file_path" in entity)) continue;
+    const normalizedPath = normalizeMirrorPath(entity.file_path, entityType);
+    const owner = paths.get(normalizedPath);
+    failUnless(
+      owner === undefined || owner === entity.uuid,
+      `Markdown path ${normalizedPath} is owned by multiple UUIDs`
+    );
+    paths.set(normalizedPath, entity.uuid);
   }
   const relationships: ProposedRelationship[] = [];
   const edgeKeys = new Set<string>();
-  for (const row of ENTITY_ROWS) {
-    for (const entity of snapshot[row.type]) {
-      if ("parent_id" in entity && entity.parent_id !== undefined) {
-        const parentUuid = ids.get(`${row.type}:${entity.parent_id}`);
-        if (parentUuid === undefined) {
-          throw new EntityNotFoundError(row.type, entity.parent_id);
-        }
+  for (const { entityType, entity } of entities) {
+    if ("parent_id" in entity && entity.parent_id !== undefined) {
+      const parentUuid = endpointUuid(entityType, entity.parent_id);
+      failUnless(
+        parentUuid !== entity.uuid,
+        `${entity.id} cannot be its own parent`
+      );
+      if (entity.parent_uuid !== undefined) {
         failUnless(
-          parentUuid !== entity.uuid,
-          `${entity.id} cannot be its own parent`
+          entity.parent_uuid === parentUuid,
+          `Parent UUID ${entity.parent_uuid} for ${entity.id} does not match ${entity.parent_id} (${parentUuid})`
         );
-        if (entity.parent_uuid !== undefined) {
-          failUnless(
-            entity.parent_uuid === parentUuid,
-            `Parent UUID ${entity.parent_uuid} for ${entity.id} does not match ${entity.parent_id} (${parentUuid})`
-          );
-        }
       }
-      for (const relationship of entity.relationships) {
-        failUnless(
-          relationship.from === entity.id && relationship.from_type === row.type,
-          `${entity.id} owns an invalid outgoing relationship from ${relationship.from}`
-        );
-        const fromUuid = ids.get(`${relationship.from_type}:${relationship.from}`);
-        const toUuid = ids.get(`${relationship.to_type}:${relationship.to}`);
-        if (fromUuid === undefined) {
-          throw new EntityNotFoundError(relationship.from_type, relationship.from);
-        }
-        if (toUuid === undefined) {
-          throw new EntityNotFoundError(relationship.to_type, relationship.to);
-        }
-        const key = edgeKey(relationship.type, fromUuid, toUuid);
-        failUnless(!edgeKeys.has(key), `Duplicate ${relationship.type} edge ${relationship.from} -> ${relationship.to}`);
-        edgeKeys.add(key);
-        relationships.push({ relationship, from_uuid: fromUuid, to_uuid: toUuid });
+    }
+    for (const relationship of entity.relationships) {
+      failUnless(
+        relationship.from === entity.id && relationship.from_type === entityType,
+        `${entity.id} owns an invalid outgoing relationship from ${relationship.from}`
+      );
+      const toUuid = endpointUuid(relationship.to_type, relationship.to);
+      if (toUuid === null) continue;
+      const key = edgeKey(relationship.type, entity.uuid, toUuid);
+      failUnless(!edgeKeys.has(key), `Duplicate ${relationship.type} edge ${relationship.from} -> ${relationship.to}`);
+      edgeKeys.add(key);
+      relationships.push({ relationship, from_uuid: entity.uuid, to_uuid: toUuid });
+    }
+    for (const feedback of entity.feedback ?? []) {
+      if (feedback.from_id !== undefined) {
+        endpointUuid(getEntityTypeFromId(feedback.from_id), feedback.from_id);
       }
-      for (const feedback of entity.feedback ?? []) {
-        if (feedback.from_id !== undefined) {
-          const fromType = getEntityTypeFromId(feedback.from_id);
-          const fromUuid = ids.get(`${fromType}:${feedback.from_id}`);
-          if (fromUuid === undefined) {
-            throw new EntityNotFoundError(fromType, feedback.from_id);
-          }
-        }
-        const targetType = getEntityTypeFromId(feedback.to_id);
-        const targetUuid = ids.get(`${targetType}:${feedback.to_id}`);
-        if (targetUuid === undefined) {
-          throw new EntityNotFoundError(targetType, feedback.to_id);
-        }
-      }
+      endpointUuid(getEntityTypeFromId(feedback.to_id), feedback.to_id);
     }
   }
   validateSupersessionEdges(
@@ -140,17 +141,80 @@ function edgeKey(type: string, fromUuid: string, toUuid: string): string {
   return `${type}:${fromUuid}:${toUuid}`;
 }
 
-export interface ProposedGraph {
+function blockedIssueIds(
+  issues: readonly IssueJSONL[],
+  relationships: readonly ProposedRelationship[]
+): Set<string> {
+  const statuses = new Map(issues.map((issue) => [issue.id, issue.status]));
+  const statusOf = (id: string): IssueStatus => {
+    const status = statuses.get(id);
+    if (status === undefined) throw new EntityNotFoundError("issue", id);
+    return status;
+  };
+  const blocked = new Set<string>();
+  for (const { relationship } of relationships) {
+    const pair = blockingPair({
+      from_id: relationship.from,
+      from_type: relationship.from_type,
+      to_id: relationship.to,
+      to_type: relationship.to_type,
+      relationship_type: relationship.type,
+    });
+    if (pair === null) continue;
+    const status = statusOf(pair.blockedId);
+    if (statusWithBlocker(status, statusOf(pair.blockerId)) !== status) {
+      blocked.add(pair.blockedId);
+    }
+  }
+  return blocked;
+}
+
+export interface ProposedState {
+  readonly snapshot: EntitySnapshots;
   readonly relationships: readonly ProposedRelationship[];
 }
 
-export function validateProposedSnapshot(snapshot: EntitySnapshots): ProposedGraph {
-  return { relationships: proposedRelationships(snapshot) };
+/**
+ * Validate a complete proposed snapshot and derive the state it applies:
+ * every issue blocked by an edge of the proposed graph carries that status,
+ * so the result depends only on the snapshot, never on the cache it replaces.
+ */
+export function validateProposedSnapshot(snapshot: EntitySnapshots): ProposedState {
+  const relationships = proposedRelationships(snapshot);
+  const blocked = blockedIssueIds(snapshot.issue, relationships);
+  return {
+    snapshot: {
+      ...snapshot,
+      issue: snapshot.issue.map((issue) =>
+        blocked.has(issue.id) ? { ...issue, status: "blocked" } : issue
+      ),
+    },
+    relationships,
+  };
 }
 
+/**
+ * Validate the entities of one snapshot file, as the per-file git merge
+ * driver sees them: identities, paths, parents, supersession and every
+ * endpoint inside that file. Endpoints in other files are validated when the
+ * whole snapshot is imported.
+ */
+export function validateProposedFile<K extends EntityType>(
+  entityType: K,
+  entities: EntitySnapshot<K>[]
+): void {
+  const scope: ProposedScope = {};
+  scope[entityType] = entities;
+  proposedRelationships(scope);
+}
+
+/**
+ * Replace the cache's relationships with the proposed graph. Rows only: the
+ * status effects of the graph are already part of the proposed snapshot.
+ */
 export function applyProposedGraph(
   db: Database.Database,
-  graph: ProposedGraph
+  graph: ProposedState
 ): void {
   const proposedKeys = new Set(
     graph.relationships.map((edge) =>
@@ -169,21 +233,16 @@ export function applyProposedGraph(
     ) {
       continue;
     }
-    removeRelationship(
-      db,
-      relationship.from_id,
-      relationship.from_type,
-      relationship.to_id,
-      relationship.to_type,
-      relationship.relationship_type
-    );
+    deleteRelationshipRow(db, relationship);
   }
   for (const edge of graph.relationships) {
     if (existingKeys.has(edgeKey(edge.relationship.type, edge.from_uuid, edge.to_uuid))) continue;
-    addRelationship(db, {
+    insertRelationshipRow(db, {
       from_id: edge.relationship.from,
+      from_uuid: edge.from_uuid,
       from_type: edge.relationship.from_type,
       to_id: edge.relationship.to,
+      to_uuid: edge.to_uuid,
       to_type: edge.relationship.to_type,
       relationship_type: edge.relationship.type,
     });

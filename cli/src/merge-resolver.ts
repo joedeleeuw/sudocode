@@ -22,21 +22,14 @@ import {
   type IdentityClaim,
   type ReferenceNamespace,
 } from "./identity-collisions.js";
-import { normalizeMirrorPath } from "./snapshot.js";
+import { conflictMarkerKind, normalizeMirrorPath } from "./snapshot.js";
+
+export type ConflictSection =
+  | { type: "clean"; lines: string[] }
+  | { type: "conflict"; ours: string[]; theirs: string[]; marker: ConflictMarker };
 
 /**
- * Conflict section from parsing git conflict markers
- */
-export interface ConflictSection {
-  type: "clean" | "conflict";
-  lines: string[];
-  ours?: string[];
-  theirs?: string[];
-  marker?: ConflictMarker;
-}
-
-/**
- * Conflict marker metadata
+ * Conflict marker metadata (zero-based line indexes)
  */
 export interface ConflictMarker {
   start: number;
@@ -44,6 +37,18 @@ export interface ConflictMarker {
   end: number;
   oursLabel: string;
   theirsLabel: string;
+}
+
+export class ConflictMarkerError extends Error {
+  readonly lineNumber: number;
+  readonly reason: string;
+
+  constructor(lineNumber: number, reason: string) {
+    super(`line ${lineNumber}: ${reason}`);
+    this.name = "ConflictMarkerError";
+    this.lineNumber = lineNumber;
+    this.reason = reason;
+  }
 }
 
 /**
@@ -75,126 +80,105 @@ export interface ConflictResolution {
 }
 
 /**
- * Check if file contains git conflict markers
+ * Check if file contains any git conflict marker line
  */
 export function hasGitConflictMarkers(filePath: string): boolean {
   if (!fs.existsSync(filePath)) {
     return false;
   }
+  return fs
+    .readFileSync(filePath, "utf8")
+    .split("\n")
+    .some((line) => conflictMarkerKind(line) !== null);
+}
 
-  const content = fs.readFileSync(filePath, "utf8");
-  return (
-    content.includes("<<<<<<<") &&
-    content.includes("=======") &&
-    content.includes(">>>>>>>")
-  );
+interface OpenConflict {
+  start: number;
+  middle: number | null;
+  inBase: boolean;
+  oursLabel: string;
+  ours: string[];
+  theirs: string[];
 }
 
 /**
- * Parse JSONL file containing git conflict markers
- * Returns structured representation of clean sections and conflicts
+ * Parse content containing git conflict markers into clean and conflict sections.
+ *
+ * The whole marker structure is validated first: every block must open with
+ * <<<<<<<, may carry one ||||||| base section, must have exactly one =======
+ * separator, and must close with >>>>>>> before the next block or end of
+ * input. Any other sequence throws a ConflictMarkerError with its line.
  */
 export function parseMergeConflictFile(content: string): ConflictSection[] {
   const lines = content.split("\n");
   const sections: ConflictSection[] = [];
-  let currentSection: ConflictSection | null = null;
-  let inConflict = false;
-  let inBase = false;
-  let conflictStart = -1;
-  let conflictMiddle = -1;
-  let oursLabel = "";
-  let theirsLabel = "";
-  let oursLines: string[] = [];
-  let theirsLines: string[] = [];
+  let clean: string[] = [];
+  let open: OpenConflict | null = null;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Start of conflict
-    if (line.startsWith("<<<<<<<")) {
-      // Save any clean section
-      if (currentSection) {
-        sections.push(currentSection);
-      }
-
-      inConflict = true;
-      inBase = false;
-      conflictStart = i;
-      oursLabel = line.substring(7).trim();
-      oursLines = [];
-      currentSection = null;
-      continue;
-    }
-
-    if (line.startsWith("|||||||") && inConflict) {
-      inBase = true;
-      continue;
-    }
-
-    // Middle of conflict
-    if (line.startsWith("=======") && inConflict) {
-      inBase = false;
-      conflictMiddle = i;
-      theirsLines = [];
-      continue;
-    }
-
-    // End of conflict
-    if (line.startsWith(">>>>>>>") && inConflict) {
-      theirsLabel = line.substring(7).trim();
-
-      sections.push({
-        type: "conflict",
-        lines: [],
-        ours: oursLines,
-        theirs: theirsLines,
-        marker: {
-          start: conflictStart,
-          middle: conflictMiddle,
-          end: i,
-          oursLabel,
-          theirsLabel,
-        },
-      });
-
-      inConflict = false;
-      inBase = false;
-      conflictStart = -1;
-      conflictMiddle = -1;
-      oursLabel = "";
-      theirsLabel = "";
-      oursLines = [];
-      theirsLines = [];
-      continue;
-    }
-
-    // Accumulate lines
-    if (inConflict) {
-      if (inBase) {
+  for (const [index, line] of lines.entries()) {
+    const kind = conflictMarkerKind(line);
+    const lineNumber = index + 1;
+    if (open === null) {
+      if (kind === null) {
+        clean.push(line);
         continue;
       }
-      if (conflictMiddle === -1) {
-        oursLines.push(line);
-      } else {
-        theirsLines.push(line);
+      if (kind !== "open") {
+        throw new ConflictMarkerError(lineNumber, `${line.slice(0, 7)} without an opening <<<<<<< marker`);
       }
-    } else {
-      // Clean line
-      if (!currentSection || currentSection.type !== "clean") {
-        currentSection = {
-          type: "clean",
-          lines: [],
-        };
-      }
-      currentSection.lines.push(line);
+      if (clean.length > 0) sections.push({ type: "clean", lines: clean });
+      clean = [];
+      open = { start: index, middle: null, inBase: false, oursLabel: line.slice(7).trim(), ours: [], theirs: [] };
+      continue;
     }
+    const opened = `the conflict opened at line ${open.start + 1}`;
+    if (kind === null) {
+      if (open.middle !== null) open.theirs.push(line);
+      else if (!open.inBase) open.ours.push(line);
+      continue;
+    }
+    if (kind === "open") {
+      throw new ConflictMarkerError(lineNumber, `<<<<<<< inside ${opened}`);
+    }
+    if (kind === "base") {
+      if (open.middle !== null || open.inBase) {
+        throw new ConflictMarkerError(lineNumber, `||||||| outside the ours side of ${opened}`);
+      }
+      open.inBase = true;
+      continue;
+    }
+    if (kind === "separator") {
+      if (open.middle !== null) {
+        throw new ConflictMarkerError(lineNumber, `second ======= in ${opened}`);
+      }
+      open.middle = index;
+      continue;
+    }
+    if (open.middle === null) {
+      throw new ConflictMarkerError(lineNumber, `>>>>>>> before the ======= separator of ${opened}`);
+    }
+    sections.push({
+      type: "conflict",
+      ours: open.ours,
+      theirs: open.theirs,
+      marker: {
+        start: open.start,
+        middle: open.middle,
+        end: index,
+        oursLabel: open.oursLabel,
+        theirsLabel: line.slice(7).trim(),
+      },
+    });
+    open = null;
   }
 
-  // Save final clean section
-  if (currentSection) {
-    sections.push(currentSection);
+  if (open !== null) {
+    throw new ConflictMarkerError(
+      open.start + 1,
+      "conflict opened here has no closing >>>>>>> marker before the end of the file"
+    );
   }
-
+  if (clean.length > 0) sections.push({ type: "clean", lines: clean });
   return sections;
 }
 
@@ -338,7 +322,7 @@ export function resolveYamlConflicts(
       resolved.push(...section.lines);
     } else {
       // Conflict block - apply latest-wins
-      const chosen = useOurs ? section.ours! : section.theirs!;
+      const chosen = useOurs ? section.ours : section.theirs;
       resolved.push(...chosen);
     }
   }

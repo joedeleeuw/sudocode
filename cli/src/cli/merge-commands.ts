@@ -8,20 +8,24 @@ import * as path from "path";
 import * as os from "os";
 import type Database from "better-sqlite3";
 import {
+  ConflictMarkerError,
   hasGitConflictMarkers,
   parseMergeConflictFile,
+  type ConflictSection,
   resolveEntities,
   mergeThreeWay,
   type ResolutionStats,
 } from "../merge-resolver.js";
 import { writeJSONL } from "../jsonl.js";
 import {
+  conflictStructureRecovery,
   decodeSnapshotContent,
   decodeSnapshotLine,
   inferSnapshotEntityType,
   readEntitySnapshotFile,
   readPersistedSnapshot,
   snapshotFilePath,
+  SnapshotDecodeError,
   validateSnapshotEntities,
 } from "../snapshot.js";
 import { importFromJSONL } from "../import.js";
@@ -32,7 +36,7 @@ import {
   type EntitySnapshot,
   type EntitySnapshots,
 } from "@sudocode-ai/types/entities";
-import { validateProposedSnapshot } from "../proposed-graph.js";
+import { validateProposedFile, validateProposedSnapshot } from "../proposed-graph.js";
 
 export interface CommandContext {
   db: Database.Database;
@@ -146,15 +150,31 @@ export async function handleResolveConflicts(
   }
 }
 
+function parseConflictSections(filePath: string): ConflictSection[] {
+  try {
+    return parseMergeConflictFile(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    if (error instanceof ConflictMarkerError) {
+      throw new SnapshotDecodeError(
+        filePath,
+        error.lineNumber,
+        "$",
+        error.reason,
+        conflictStructureRecovery(filePath)
+      );
+    }
+    throw error;
+  }
+}
+
 function decodeConflictSides<K extends EntityType>(
   filePath: string,
   entityType: K
 ): { ours: EntitySnapshot<K>[]; theirs: EntitySnapshot<K>[] } {
-  const sections = parseMergeConflictFile(fs.readFileSync(filePath, "utf8"));
   const ours: EntitySnapshot<K>[] = [];
   const theirs: EntitySnapshot<K>[] = [];
   let lineNumber = 1;
-  for (const section of sections) {
+  for (const section of parseConflictSections(filePath)) {
     if (section.type === "clean") {
       for (const line of section.lines) {
         const entity = decodeSnapshotLine(filePath, entityType, line, lineNumber++);
@@ -165,15 +185,12 @@ function decodeConflictSides<K extends EntityType>(
       }
       continue;
     }
-    const marker = section.marker;
-    if (!marker) {
-      throw new Error(`Conflict section in ${filePath} has no marker metadata`);
-    }
-    for (const [index, line] of (section.ours ?? []).entries()) {
+    const { marker } = section;
+    for (const [index, line] of section.ours.entries()) {
       const entity = decodeSnapshotLine(filePath, entityType, line, marker.start + 2 + index);
       if (entity) ours.push(entity);
     }
-    for (const [index, line] of (section.theirs ?? []).entries()) {
+    for (const [index, line] of section.theirs.entries()) {
       const entity = decodeSnapshotLine(filePath, entityType, line, marker.middle + 2 + index);
       if (entity) theirs.push(entity);
     }
@@ -185,15 +202,17 @@ function decodeConflictSides<K extends EntityType>(
 /**
  * Resolve conflicts in a single JSONL file
  *
- * Uses a true three-way merge when git index stages 1/2/3 are available, and
- * otherwise a two-way merge of the ours and theirs sides of the conflict
- * markers. Nothing is written here.
+ * The working file's conflict markers are validated and every side decoded
+ * first. Uses a true three-way merge when git index stages 1/2/3 are
+ * available, and otherwise a two-way merge of the ours and theirs sides of the
+ * conflict markers. Nothing is written here.
  */
 async function resolveFile<K extends EntityType>(
   filePath: string,
   entityType: K,
   options: ResolveConflictsOptions
 ): Promise<{ entities: EntitySnapshot<K>[]; stats: ResolutionStats }> {
+  const sides = decodeConflictSides(filePath, entityType);
   const baseContent = readGitStage(filePath, 1);
   const oursContent = readGitStage(filePath, 2);
   const theirsContent = readGitStage(filePath, 3);
@@ -221,7 +240,6 @@ async function resolveFile<K extends EntityType>(
       chalk.yellow('  Base version unavailable, merging the ours and theirs sides of the conflict markers')
     );
   }
-  const sides = decodeConflictSides(filePath, entityType);
   return resolveEntities([sides.ours, sides.theirs]);
 }
 
@@ -274,7 +292,9 @@ function mergeDriverFiles<K extends EntityType>(
     readEntitySnapshotFile(options.ours, entityType),
     readEntitySnapshotFile(options.theirs, entityType)
   );
-  return validateSnapshotEntities(options.ours, entityType, entities);
+  const merged = validateSnapshotEntities(options.ours, entityType, entities);
+  validateProposedFile(entityType, merged);
+  return merged;
 }
 
 /**

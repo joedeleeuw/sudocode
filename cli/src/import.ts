@@ -40,7 +40,7 @@ import { findExistingEntityFile } from "./filename-generator.js";
 import {
   listIssues,
   createIssue,
-  updateIssue,
+  updateIssueRow,
   deleteIssue,
   getIssue,
 } from "./operations/issues.js";
@@ -446,7 +446,7 @@ export function importIssues(
   // Second pass: set parent_id for newly added issues (now all parents exist)
   // Preserve updated_at to avoid clobbering timestamps set in pass 1
   for (const issue of issuesWithParents) {
-    updateIssue(db, issue.id, {
+    updateIssueRow(db, issue.id, {
       parent_id: issue.parent_id,
       updated_at: issue.updated_at,
     });
@@ -456,7 +456,7 @@ export function importIssues(
   for (const id of changes.updated) {
     const issue = issues.find((i) => i.id === id);
     if (issue) {
-      updateIssue(db, issue.id, {
+      updateIssueRow(db, issue.id, {
         title: issue.title,
         content: issue.content,
         status: issue.status,
@@ -698,8 +698,9 @@ export async function importFromJSONL(
     adr: adrsFile,
   });
   const existing = existingEntitySnapshot(db);
-  const { proposed, collisions } = proposeSnapshot(existing, snapshot);
-  const graph = validateProposedSnapshot(proposed);
+  const { proposed: remapped, collisions } = proposeSnapshot(existing, snapshot);
+  const graph = validateProposedSnapshot(remapped);
+  const proposed = graph.snapshot;
 
   const changes: ChangeMap = {
     spec: detectChanges(existing.spec, proposed.spec, forceUpdateIds),

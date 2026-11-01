@@ -209,13 +209,36 @@ export function getIssue(db: Database.Database, id: string): Issue | null {
 }
 
 /**
- * Update an issue
+ * Update an issue, then unblock its dependents when it becomes closed
  */
 export function updateIssue(
   db: Database.Database,
   id: string,
   input: UpdateIssueInput
 ): Issue {
+  const { existing, updated } = writeIssueRow(db, id, input);
+  if (input.status === "closed" && existing.status !== "closed") {
+    updateDependentBlockedIssues(db, id);
+  }
+  return updated;
+}
+
+/**
+ * Update one issue row without status effects on other issues
+ */
+export function updateIssueRow(
+  db: Database.Database,
+  id: string,
+  input: UpdateIssueInput
+): Issue {
+  return writeIssueRow(db, id, input).updated;
+}
+
+function writeIssueRow(
+  db: Database.Database,
+  id: string,
+  input: UpdateIssueInput
+): { existing: Issue; updated: Issue } {
   const existing = getIssue(db, id);
   if (!existing) {
     throw new Error(`Issue not found: ${id}`);
@@ -320,7 +343,7 @@ export function updateIssue(
   }
 
   if (updates.length === 0) {
-    return existing;
+    return { existing, updated: existing };
   }
 
   const stmt = db.prepare(`
@@ -333,13 +356,7 @@ export function updateIssue(
     if (!updated) {
       throw new Error(`Failed to update issue ${id}`);
     }
-
-    // If status changed to 'closed', update any dependent blocked issues
-    if (input.status === "closed" && existing.status !== "closed") {
-      updateDependentBlockedIssues(db, id);
-    }
-
-    return updated;
+    return { existing, updated };
   } catch (error: any) {
     if (error.code && error.code.startsWith("SQLITE_CONSTRAINT")) {
       throw new Error(`Constraint violation: ${error.message}`);

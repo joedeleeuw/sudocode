@@ -3,7 +3,7 @@
  */
 
 import type Database from "better-sqlite3";
-import type { Relationship, EntityType, RelationshipType } from "../types.js";
+import type { Relationship, EntityType, IssueStatus, RelationshipType } from "../types.js";
 import { isValidRelationshipType, getValidRelationshipTypes } from "../validation.js";
 import { getEntityRow } from "@sudocode-ai/types/entities";
 import { getIssue } from "./issues.js";
@@ -86,6 +86,74 @@ export function validateSupersessionEdges(edges: SupersessionEdge[]): void {
   for (const uuid of adjacency.keys()) visit(uuid);
 }
 
+type RelationshipEndpoints = Pick<
+  CreateRelationshipInput,
+  "from_id" | "from_type" | "to_id" | "to_type" | "relationship_type"
+>;
+
+export type RelationshipRow = Omit<Relationship, "created_at">;
+
+const BLOCKED_ENDPOINT: Partial<Record<RelationshipType, "from" | "to">> = {
+  blocks: "to",
+  "depends-on": "from",
+};
+
+/**
+ * The blocked and blocking issue of an issue-to-issue `blocks` or
+ * `depends-on` edge, or null when the edge has no status effect.
+ */
+export function blockingPair(
+  edge: RelationshipEndpoints
+): { blockedId: string; blockerId: string } | null {
+  const blocked = BLOCKED_ENDPOINT[edge.relationship_type];
+  if (blocked === undefined || edge.from_type !== "issue" || edge.to_type !== "issue") {
+    return null;
+  }
+  return blocked === "to"
+    ? { blockedId: edge.to_id, blockerId: edge.from_id }
+    : { blockedId: edge.from_id, blockerId: edge.to_id };
+}
+
+/**
+ * Status an issue takes from one of its blockers: an open or in-progress
+ * issue with a blocker that is not closed is blocked.
+ */
+export function statusWithBlocker(
+  blockedStatus: IssueStatus,
+  blockerStatus: IssueStatus
+): IssueStatus {
+  return blockerStatus !== "closed" &&
+    (blockedStatus === "open" || blockedStatus === "in_progress")
+    ? "blocked"
+    : blockedStatus;
+}
+
+/**
+ * Insert one relationship row. No validation and no status effects.
+ */
+export function insertRelationshipRow(db: Database.Database, row: RelationshipRow): void {
+  db.prepare(`
+    INSERT INTO relationships (
+      from_id, from_uuid, from_type, to_id, to_uuid, to_type, relationship_type, metadata
+    ) VALUES (
+      @from_id, @from_uuid, @from_type, @to_id, @to_uuid, @to_type, @relationship_type, @metadata
+    )
+  `).run({ ...row, metadata: row.metadata ?? null });
+}
+
+/**
+ * Delete one relationship row. No status effects.
+ */
+export function deleteRelationshipRow(db: Database.Database, edge: RelationshipEndpoints): boolean {
+  const result = db.prepare(`
+    DELETE FROM relationships
+    WHERE from_id = ? AND from_type = ?
+      AND to_id = ? AND to_type = ?
+      AND relationship_type = ?
+  `).run(edge.from_id, edge.from_type, edge.to_id, edge.to_type, edge.relationship_type);
+  return result.changes > 0;
+}
+
 function validateSupersession(
   db: Database.Database,
   input: CreateRelationshipInput,
@@ -149,16 +217,8 @@ export function addRelationship(
     return existing;
   }
 
-  const stmt = db.prepare(`
-    INSERT INTO relationships (
-      from_id, from_uuid, from_type, to_id, to_uuid, to_type, relationship_type, metadata
-    ) VALUES (
-      @from_id, @from_uuid, @from_type, @to_id, @to_uuid, @to_type, @relationship_type, @metadata
-    )
-  `);
-
   try {
-    stmt.run({
+    insertRelationshipRow(db, {
       from_id: input.from_id,
       from_uuid: fromEntity.uuid,
       from_type: input.from_type,
@@ -166,7 +226,7 @@ export function addRelationship(
       to_uuid: toEntity.uuid,
       to_type: input.to_type,
       relationship_type: input.relationship_type,
-      metadata: input.metadata ?? null,
+      metadata: input.metadata,
     });
 
     const rel = getRelationship(
@@ -182,23 +242,9 @@ export function addRelationship(
       throw new Error("Failed to create relationship");
     }
 
-    // Auto-update blocked status when adding a 'blocks' or 'depends-on' relationship
-    // Semantics:
-    //   - blocks: from_id blocks to_id (from_id is the blocker, to_id gets blocked)
-    //   - depends-on: from_id depends-on to_id (from_id gets blocked until to_id is done)
-    if (
-      (input.relationship_type === "blocks" ||
-        input.relationship_type === "depends-on") &&
-      input.from_type === "issue" &&
-      input.to_type === "issue"
-    ) {
-      // For 'blocks': to_id is blocked by from_id
-      // For 'depends-on': from_id is blocked by to_id
-      const blockedId =
-        input.relationship_type === "blocks" ? input.to_id : input.from_id;
-      const blockerId =
-        input.relationship_type === "blocks" ? input.from_id : input.to_id;
-      autoUpdateBlockedStatusOnAdd(db, blockedId, blockerId);
+    const pair = blockingPair(input);
+    if (pair) {
+      autoUpdateBlockedStatusOnAdd(db, pair.blockedId, pair.blockerId);
     }
 
     return rel;
@@ -222,24 +268,14 @@ function autoUpdateBlockedStatusOnAdd(
   blockerIssueId: string
 ): void {
   const blockerIssue = getIssue(db, blockerIssueId);
-
-  // Only set to 'blocked' if the blocker is not closed
-  if (blockerIssue && blockerIssue.status !== "closed") {
-    const blockedIssue = getIssue(db, blockedIssueId);
-
-    // Only update if currently open or in_progress (don't override other statuses)
-    if (
-      blockedIssue &&
-      (blockedIssue.status === "open" || blockedIssue.status === "in_progress")
-    ) {
-      const updateStmt = db.prepare(`
-        UPDATE issues
-        SET status = 'blocked', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `);
-      updateStmt.run(blockedIssueId);
-    }
-  }
+  const blockedIssue = getIssue(db, blockedIssueId);
+  if (!blockerIssue || !blockedIssue) return;
+  if (statusWithBlocker(blockedIssue.status, blockerIssue.status) === blockedIssue.status) return;
+  db.prepare(`
+    UPDATE issues
+    SET status = 'blocked', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(blockedIssueId);
 }
 
 /**
@@ -278,36 +314,12 @@ export function removeRelationship(
   to_type: EntityType,
   relationship_type: RelationshipType
 ): boolean {
-  const stmt = db.prepare(`
-    DELETE FROM relationships
-    WHERE from_id = ? AND from_type = ?
-      AND to_id = ? AND to_type = ?
-      AND relationship_type = ?
-  `);
-
-  const result = stmt.run(
-    from_id,
-    from_type,
-    to_id,
-    to_type,
-    relationship_type
-  );
-  const removed = result.changes > 0;
-
-  // Auto-update blocked status when removing a 'blocks' or 'depends-on' relationship
-  // Semantics:
-  //   - blocks: from_id blocks to_id, so to_id is the one being unblocked
-  //   - depends-on: from_id depends-on to_id, so from_id is the one being unblocked
-  if (
-    removed &&
-    (relationship_type === "blocks" || relationship_type === "depends-on") &&
-    from_type === "issue" &&
-    to_type === "issue"
-  ) {
-    const unblockedId = relationship_type === "blocks" ? to_id : from_id;
-    autoUpdateBlockedStatusOnRemove(db, unblockedId);
+  const edge = { from_id, from_type, to_id, to_type, relationship_type };
+  const removed = deleteRelationshipRow(db, edge);
+  const pair = blockingPair(edge);
+  if (removed && pair) {
+    autoUpdateBlockedStatusOnRemove(db, pair.blockedId);
   }
-
   return removed;
 }
 

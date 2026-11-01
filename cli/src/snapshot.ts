@@ -499,6 +499,28 @@ export function decodeSnapshotValue<K extends EntityType>(
   return decodeSelectedSnapshot(SNAPSHOT_DECODERS[entityType], context, value);
 }
 
+const CONFLICT_MARKERS = {
+  "<<<<<<<": "open",
+  "|||||||": "base",
+  "=======": "separator",
+  ">>>>>>>": "close",
+} as const;
+
+export type ConflictMarkerKind = (typeof CONFLICT_MARKERS)[keyof typeof CONFLICT_MARKERS];
+
+function isConflictMarkerPrefix(prefix: string): prefix is keyof typeof CONFLICT_MARKERS {
+  return Object.prototype.hasOwnProperty.call(CONFLICT_MARKERS, prefix);
+}
+
+export function conflictMarkerKind(line: string): ConflictMarkerKind | null {
+  const prefix = line.slice(0, 7);
+  return isConflictMarkerPrefix(prefix) ? CONFLICT_MARKERS[prefix] : null;
+}
+
+export function conflictStructureRecovery(filePath: string): string {
+  return `Finish that conflict block by hand so it has <<<<<<<, ======= and >>>>>>> markers in order, or recreate the markers with \`git checkout --merge -- ${filePath}\`, then rerun \`sudocode resolve-conflicts\`.`;
+}
+
 export function decodeSnapshotLine<K extends EntityType>(
   filePath: string,
   entityType: K,
@@ -508,7 +530,7 @@ export function decodeSnapshotLine<K extends EntityType>(
 ): EntitySnapshot<K> | null {
   if (line.trim() === "") return null;
   const context = { filePath, lineNumber };
-  if (/^(<{7}|={7}|>{7}|\|{7})/.test(line)) {
+  if (conflictMarkerKind(line) !== null) {
     throw new SnapshotDecodeError(
       filePath,
       lineNumber,

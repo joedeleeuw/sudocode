@@ -20,7 +20,7 @@ import { listIssues, getIssue, deleteIssue } from "./operations/issues.js";
 import { listAdrs, getAdr, getAdrByFilePath, deleteAdr } from "./operations/adrs.js";
 import { deleteEntity, getEntity } from "./operations/entities.js";
 import type { EntityType } from "@sudocode-ai/types";
-import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
+import { ENTITY_ROWS, getEntityRow, type DocumentEntityType } from "@sudocode-ai/types/entities";
 import { parseMarkdownFile } from "./markdown.js";
 import { listFeedback } from "./operations/feedback.js";
 import { getTags } from "./operations/tags.js";
@@ -890,7 +890,7 @@ export function startWatcher(options: WatcherOptions): WatcherControl {
             let syncedCount = 0;
 
             const documents: Array<{
-              entityType: "spec" | "adr";
+              entityType: DocumentEntityType;
               entities: Array<{ id: string; file_path: string }>;
             }> = [
               { entityType: "spec", entities: listSpecs(db) },

@@ -1,9 +1,10 @@
 import type Database from "better-sqlite3";
-import type { Adr, ExternalLink } from "@sudocode-ai/types";
+import type { Adr } from "@sudocode-ai/types";
 
 export type AdrWithState = Adr & { superseded: boolean };
 import { generateUUID } from "../id-generator.js";
 import { getIncomingRelationships } from "./relationships.js";
+import { decodeExternalLinks } from "../external-links.js";
 
 export interface CreateAdrInput {
   id: string;
@@ -58,50 +59,9 @@ function optionalString(
   return value;
 }
 
-function decodeExternalLink(value: unknown): ExternalLink {
-  if (!isRecord(value)) {
-    throw new Error("Invalid ADR external link: expected an object");
-  }
-  if (
-    typeof value.provider !== "string" ||
-    typeof value.external_id !== "string" ||
-    typeof value.sync_enabled !== "boolean" ||
-    (value.sync_direction !== "inbound" &&
-      value.sync_direction !== "outbound" &&
-      value.sync_direction !== "bidirectional")
-  ) {
-    throw new Error("Invalid ADR external link fields");
-  }
-  const metadata = value.metadata;
-  const importMetadata = value.import_metadata;
-  if (metadata !== undefined && !isRecord(metadata)) {
-    throw new Error("Invalid ADR external link metadata");
-  }
-  if (importMetadata !== undefined && !isRecord(importMetadata)) {
-    throw new Error("Invalid ADR external link import_metadata");
-  }
-  return {
-    provider: value.provider,
-    external_id: value.external_id,
-    external_url: optionalString(value, "external_url"),
-    sync_enabled: value.sync_enabled,
-    sync_direction: value.sync_direction,
-    last_synced_at: optionalString(value, "last_synced_at"),
-    external_updated_at: optionalString(value, "external_updated_at"),
-    metadata,
-    imported_at: optionalString(value, "imported_at"),
-    content_hash: optionalString(value, "content_hash"),
-    import_metadata: importMetadata,
-  };
-}
-
-function decodeExternalLinks(value: unknown): ExternalLink[] | undefined {
+function decodeStoredExternalLinks(value: unknown): ReturnType<typeof decodeExternalLinks> {
   if (typeof value !== "string") return undefined;
-  const parsed: unknown = JSON.parse(value);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Invalid ADR external_links: expected an array");
-  }
-  return parsed.map(decodeExternalLink);
+  return decodeExternalLinks(JSON.parse(value));
 }
 
 function decodeAdr(row: unknown): Adr | null {
@@ -123,7 +83,7 @@ function decodeAdr(row: unknown): Adr | null {
     archived_at: optionalString(row, "archived_at"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
-    external_links: decodeExternalLinks(
+    external_links: decodeStoredExternalLinks(
       "external_links" in row ? row.external_links : undefined
     ),
   };

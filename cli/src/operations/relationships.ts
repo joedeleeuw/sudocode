@@ -39,6 +39,53 @@ export interface CreateRelationshipInput {
   metadata?: string;
 }
 
+export interface SupersessionEdge {
+  from_id: string;
+  from_uuid: string;
+  from_type: EntityType;
+  to_id: string;
+  to_uuid: string;
+  to_type: EntityType;
+}
+
+export function validateSupersessionEdges(edges: SupersessionEdge[]): void {
+  const adjacency = new Map<string, SupersessionEdge[]>();
+  for (const edge of edges) {
+    if (edge.from_type !== "adr" || edge.to_type !== "adr") {
+      throw new InvalidRelationshipError(
+        `supersedes requires an ADR source and target; received ${edge.from_type} -> ${edge.to_type}`
+      );
+    }
+    if (edge.from_uuid === edge.to_uuid) {
+      throw new InvalidRelationshipError(
+        `ADR ${edge.from_id} cannot supersede itself`
+      );
+    }
+    const outgoing = adjacency.get(edge.from_uuid) ?? [];
+    outgoing.push(edge);
+    adjacency.set(edge.from_uuid, outgoing);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (uuid: string, lastEdge?: SupersessionEdge): void => {
+    if (visited.has(uuid)) return;
+    if (visiting.has(uuid)) {
+      throw new InvalidRelationshipError(
+        lastEdge
+          ? `supersedes ${lastEdge.from_id} -> ${lastEdge.to_id} would create a cycle`
+          : `supersedes graph contains a cycle at ${uuid}`
+      );
+    }
+    visiting.add(uuid);
+    for (const edge of adjacency.get(uuid) ?? []) {
+      visit(edge.to_uuid, edge);
+    }
+    visiting.delete(uuid);
+    visited.add(uuid);
+  };
+  for (const uuid of adjacency.keys()) visit(uuid);
+}
+
 function validateSupersession(
   db: Database.Database,
   input: CreateRelationshipInput,
@@ -46,34 +93,20 @@ function validateSupersession(
   toEntity: { id: string; uuid: string }
 ): void {
   if (input.relationship_type !== "supersedes") return;
-  if (input.from_type !== "adr" || input.to_type !== "adr") {
-    throw new InvalidRelationshipError(
-      `supersedes requires an ADR source and target; received ${input.from_type} -> ${input.to_type}`
-    );
-  }
-  if (fromEntity.uuid === toEntity.uuid) {
-    throw new InvalidRelationshipError(
-      `ADR ${input.from_id} cannot supersede itself`
-    );
-  }
-  const cycle: unknown = db.prepare(`
-    WITH RECURSIVE reachable(uuid) AS (
-      SELECT to_uuid FROM relationships
-      WHERE from_uuid = ? AND from_type = 'adr' AND to_type = 'adr'
-        AND relationship_type = 'supersedes'
-      UNION
-      SELECT relationship.to_uuid FROM relationships relationship
-      JOIN reachable ON relationship.from_uuid = reachable.uuid
-      WHERE relationship.from_type = 'adr' AND relationship.to_type = 'adr'
-        AND relationship.relationship_type = 'supersedes'
-    )
-    SELECT 1 AS found FROM reachable WHERE uuid = ? LIMIT 1
-  `).get(toEntity.uuid, fromEntity.uuid);
-  if (cycle !== undefined) {
-    throw new InvalidRelationshipError(
-      `supersedes ${input.from_id} -> ${input.to_id} would create a cycle`
-    );
-  }
+  const existing = listRelationships(db).filter(
+    (relationship) => relationship.relationship_type === "supersedes"
+  );
+  validateSupersessionEdges([
+    ...existing,
+    {
+      from_id: input.from_id,
+      from_uuid: fromEntity.uuid,
+      from_type: input.from_type,
+      to_id: input.to_id,
+      to_uuid: toEntity.uuid,
+      to_type: input.to_type,
+    },
+  ]);
 }
 
 /**

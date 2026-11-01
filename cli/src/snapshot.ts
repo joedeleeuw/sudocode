@@ -3,7 +3,6 @@ import * as path from "path";
 import type {
   AdrJSONL,
   EntityType,
-  ExternalLink,
   FeedbackAnchor,
   FeedbackJSONL,
   IssueJSONL,
@@ -11,13 +10,27 @@ import type {
   SpecJSONL,
 } from "./types.js";
 import {
+  ENTITY_ROWS,
   ENTITY_TYPE_VALUES,
   getEntityRow,
   getEntityTypeFromId,
   isEntityType,
+  isHashID,
+  isLegacyID,
+  type DocumentEntityType,
+  type EntitySnapshot,
   type EntitySnapshots,
 } from "@sudocode-ai/types/entities";
-import { isValidIssueStatus, isValidRelationshipType } from "./validation.js";
+import { decodeExternalLinks } from "./external-links.js";
+import {
+  getValidAnchorStatuses,
+  isValidAnchorStatus,
+  isValidFeedbackType,
+  isValidIssueStatus,
+  isValidRelationshipType,
+} from "./validation.js";
+
+const LINE_RECOVERY = "Restore or correct that JSONL line, then retry.";
 
 export class SnapshotDecodeError extends Error {
   readonly filePath: string;
@@ -25,27 +38,27 @@ export class SnapshotDecodeError extends Error {
   readonly field: string;
   readonly recovery: string;
 
-  constructor(filePath: string, lineNumber: number, field: string, reason: string) {
+  constructor(
+    filePath: string,
+    lineNumber: number,
+    field: string,
+    reason: string,
+    recovery: string
+  ) {
     super(
-      `${filePath}:${lineNumber}: invalid ${field}: ${reason}. Restore or correct that JSONL line, then retry; no snapshot changes were applied.`
+      `${filePath}:${lineNumber}: invalid ${field}: ${reason}. ${recovery} No snapshot changes were applied.`
     );
     this.name = "SnapshotDecodeError";
     this.filePath = filePath;
     this.lineNumber = lineNumber;
     this.field = field;
-    this.recovery = "correct-or-restore-line-then-retry";
+    this.recovery = recovery;
   }
 }
 
 interface DecodeContext {
   filePath: string;
   lineNumber: number;
-}
-
-export interface SnapshotFileNames {
-  spec?: string;
-  issue?: string;
-  adr?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,7 +70,13 @@ function fail(
   field: string,
   reason: string
 ): never {
-  throw new SnapshotDecodeError(context.filePath, context.lineNumber, field, reason);
+  throw new SnapshotDecodeError(
+    context.filePath,
+    context.lineNumber,
+    field,
+    reason,
+    LINE_RECOVERY
+  );
 }
 
 function requiredString(
@@ -119,54 +138,15 @@ function describe(value: unknown): string {
   }
 }
 
-function decodeExternalLinks(
+function decodeSnapshotExternalLinks(
   context: DecodeContext,
   record: Record<string, unknown>
-): ExternalLink[] | undefined {
-  const value = record.external_links;
-  if (value === undefined || value === null) return undefined;
-  if (!Array.isArray(value)) {
-    fail(context, "external_links", `expected an array, received ${describe(value)}`);
+): ReturnType<typeof decodeExternalLinks> {
+  try {
+    return decodeExternalLinks(record.external_links);
+  } catch (error) {
+    fail(context, "external_links", error instanceof Error ? error.message : String(error));
   }
-  return value.map((link, index): ExternalLink => {
-    const field = `external_links[${index}]`;
-    if (!isRecord(link)) fail(context, field, `expected an object, received ${describe(link)}`);
-    const provider = requiredString(context, link, "provider");
-    const externalId = requiredString(context, link, "external_id");
-    const syncEnabled = link.sync_enabled;
-    if (typeof syncEnabled !== "boolean") {
-      fail(context, "sync_enabled", `expected a boolean, received ${describe(syncEnabled)}`);
-    }
-    const syncDirection = link.sync_direction;
-    if (
-      syncDirection !== "inbound" &&
-      syncDirection !== "outbound" &&
-      syncDirection !== "bidirectional"
-    ) {
-      fail(context, "sync_direction", "expected inbound, outbound, or bidirectional");
-    }
-    const metadata = link.metadata;
-    const importMetadata = link.import_metadata;
-    if (metadata !== undefined && !isRecord(metadata)) {
-      fail(context, "metadata", "expected an object");
-    }
-    if (importMetadata !== undefined && !isRecord(importMetadata)) {
-      fail(context, "import_metadata", "expected an object");
-    }
-    return {
-      provider,
-      external_id: externalId,
-      external_url: nullableString(context, link, "external_url"),
-      sync_enabled: syncEnabled,
-      sync_direction: syncDirection,
-      last_synced_at: nullableString(context, link, "last_synced_at"),
-      external_updated_at: nullableString(context, link, "external_updated_at"),
-      metadata,
-      imported_at: nullableString(context, link, "imported_at"),
-      content_hash: nullableString(context, link, "content_hash"),
-      import_metadata: importMetadata,
-    };
-  });
 }
 
 function decodeTags(context: DecodeContext, record: Record<string, unknown>): string[] {
@@ -206,11 +186,17 @@ function decodeRelationships(
     if (typeof type !== "string" || !isValidRelationshipType(type)) {
       fail(context, `${field}.type`, `unknown relationship type ${describe(type)}`);
     }
+    const from = requiredString(context, relationship, "from");
+    const fromType = decodeEntityType(context, relationship.from_type, `${field}.from_type`);
+    const to = requiredString(context, relationship, "to");
+    const toType = decodeEntityType(context, relationship.to_type, `${field}.to_type`);
+    decodeEntityId(context, from, fromType, `${field}.from`);
+    decodeEntityId(context, to, toType, `${field}.to`);
     return {
-      from: requiredString(context, relationship, "from"),
-      from_type: decodeEntityType(context, relationship.from_type, `${field}.from_type`),
-      to: requiredString(context, relationship, "to"),
-      to_type: decodeEntityType(context, relationship.to_type, `${field}.to_type`),
+      from,
+      from_type: fromType,
+      to,
+      to_type: toType,
       type,
     };
   });
@@ -226,8 +212,8 @@ function decodeAnchor(
     fail(context, field, `expected an object or null, received ${describe(value)}`);
   }
   const status = value.anchor_status;
-  if (status !== "valid" && status !== "relocated" && status !== "stale") {
-    fail(context, `${field}.anchor_status`, "expected valid, relocated, or stale");
+  if (!isValidAnchorStatus(status)) {
+    fail(context, `${field}.anchor_status`, `expected one of ${getValidAnchorStatuses().join(", ")}, received ${describe(status)}`);
   }
   const originalLocation = value.original_location;
   if (originalLocation !== undefined && !isRecord(originalLocation)) {
@@ -289,12 +275,8 @@ function decodeFeedback(
       fail(context, field, `expected an object, received ${describe(entry)}`);
     }
     const feedbackType = entry.feedback_type;
-    if (
-      feedbackType !== "comment" &&
-      feedbackType !== "suggestion" &&
-      feedbackType !== "request"
-    ) {
-      fail(context, `${field}.feedback_type`, "expected comment, suggestion, or request");
+    if (typeof feedbackType !== "string" || !isValidFeedbackType(feedbackType)) {
+      fail(context, `${field}.feedback_type`, `unknown feedback type ${describe(feedbackType)}`);
     }
     const dismissed = entry.dismissed;
     if (dismissed !== undefined && typeof dismissed !== "boolean") {
@@ -318,16 +300,56 @@ function decodeFeedback(
 function decodeEntityId(
   context: DecodeContext,
   id: string,
-  entityType: EntityType
+  entityType: EntityType,
+  field = "id"
 ): void {
+  if (!isHashID(id) && !isLegacyID(id)) {
+    fail(context, field, `${id} does not match the ${entityType} ID grammar`);
+  }
   let actualType: EntityType;
   try {
     actualType = getEntityTypeFromId(id);
   } catch (error) {
-    fail(context, "id", error instanceof Error ? error.message : String(error));
+    fail(context, field, error instanceof Error ? error.message : String(error));
   }
   if (actualType !== entityType) {
-    fail(context, "id", `${id} belongs to ${actualType}, not ${entityType}`);
+    fail(context, field, `${id} belongs to ${actualType}, not ${entityType}`);
+  }
+}
+
+export function normalizeMirrorPath(
+  filePath: string,
+  entityType?: DocumentEntityType
+): string {
+  const normalized = path.posix.normalize(filePath);
+  const segments = normalized.split("/");
+  const validDirs = entityType
+    ? [getEntityRow(entityType).markdownDir]
+    : ENTITY_ROWS.filter((row) => row.type !== "issue").map((row) => row.markdownDir);
+  if (
+    filePath.includes("\\") ||
+    path.posix.isAbsolute(normalized) ||
+    normalized.endsWith("/") ||
+    segments.length < 2 ||
+    segments.some((segment) => segment.length === 0 || segment === ".." || segment === ".") ||
+    !validDirs.includes(segments[0] as (typeof validDirs)[number])
+  ) {
+    const targetDir = entityType ? `${getEntityRow(entityType).markdownDir}/` : "a valid document directory";
+    throw new Error(`${filePath} must stay inside ${targetDir}`);
+  }
+  return normalized;
+}
+
+function decodeMirrorPath(
+  context: DecodeContext,
+  record: Record<string, unknown>,
+  entityType: DocumentEntityType
+): string {
+  const filePath = requiredString(context, record, "file_path");
+  try {
+    return normalizeMirrorPath(filePath, entityType);
+  } catch (error) {
+    fail(context, "file_path", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -335,20 +357,24 @@ function decodeSpec(context: DecodeContext, value: unknown): SpecJSONL {
   if (!isRecord(value)) fail(context, "$", `expected an object, received ${describe(value)}`);
   const id = requiredString(context, value, "id");
   decodeEntityId(context, id, "spec");
+  const parentId = nullableString(context, value, "parent_id");
+  if (parentId !== undefined) {
+    decodeEntityId(context, parentId, "spec", "parent_id");
+  }
   return {
     id,
     uuid: requiredString(context, value, "uuid"),
     title: requiredString(context, value, "title"),
-    file_path: requiredString(context, value, "file_path"),
+    file_path: decodeMirrorPath(context, value, "spec"),
     content: requiredString(context, value, "content"),
     priority: requiredNumber(context, value, "priority"),
     archived: persistedBoolean(context, value, "archived"),
     archived_at: nullableString(context, value, "archived_at"),
     created_at: requiredString(context, value, "created_at"),
     updated_at: requiredString(context, value, "updated_at"),
-    parent_id: nullableString(context, value, "parent_id"),
+    parent_id: parentId,
     parent_uuid: nullableString(context, value, "parent_uuid"),
-    external_links: decodeExternalLinks(context, value),
+    external_links: decodeSnapshotExternalLinks(context, value),
     relationships: decodeRelationships(context, value),
     tags: decodeTags(context, value),
     feedback: decodeFeedback(context, value),
@@ -363,6 +389,10 @@ function decodeIssue(context: DecodeContext, value: unknown): IssueJSONL {
   if (typeof status !== "string" || !isValidIssueStatus(status)) {
     fail(context, "status", `unknown issue status ${describe(status)}`);
   }
+  const parentId = nullableString(context, value, "parent_id");
+  if (parentId !== undefined) {
+    decodeEntityId(context, parentId, "issue", "parent_id");
+  }
   return {
     id,
     uuid: requiredString(context, value, "uuid"),
@@ -376,9 +406,9 @@ function decodeIssue(context: DecodeContext, value: unknown): IssueJSONL {
     created_at: requiredString(context, value, "created_at"),
     updated_at: requiredString(context, value, "updated_at"),
     closed_at: nullableString(context, value, "closed_at"),
-    parent_id: nullableString(context, value, "parent_id"),
+    parent_id: parentId,
     parent_uuid: nullableString(context, value, "parent_uuid"),
-    external_links: decodeExternalLinks(context, value),
+    external_links: decodeSnapshotExternalLinks(context, value),
     relationships: decodeRelationships(context, value),
     tags: decodeTags(context, value),
     feedback: decodeFeedback(context, value),
@@ -393,13 +423,13 @@ function decodeAdr(context: DecodeContext, value: unknown): AdrJSONL {
     id,
     uuid: requiredString(context, value, "uuid"),
     title: requiredString(context, value, "title"),
-    file_path: requiredString(context, value, "file_path"),
+    file_path: decodeMirrorPath(context, value, "adr"),
     content: requiredString(context, value, "content"),
     archived: persistedBoolean(context, value, "archived"),
     archived_at: nullableString(context, value, "archived_at"),
     created_at: requiredString(context, value, "created_at"),
     updated_at: requiredString(context, value, "updated_at"),
-    external_links: decodeExternalLinks(context, value),
+    external_links: decodeSnapshotExternalLinks(context, value),
     relationships: decodeRelationships(context, value),
     tags: decodeTags(context, value),
     feedback: decodeFeedback(context, value),
@@ -417,6 +447,13 @@ function validateFeedbackOwnership(
       fail(context, `feedback.${feedback.id}`, "feedback ID is stored by more than one owner");
     }
     feedbackIds.add(feedback.id);
+    let toType: EntityType;
+    try {
+      toType = getEntityTypeFromId(feedback.to_id);
+    } catch (error) {
+      fail(context, `feedback.${feedback.id}.to_id`, error instanceof Error ? error.message : String(error));
+    }
+    decodeEntityId(context, feedback.to_id, toType, `feedback.${feedback.id}.to_id`);
     if (feedback.from_id !== undefined) {
       let fromType: EntityType;
       try {
@@ -424,16 +461,11 @@ function validateFeedbackOwnership(
       } catch (error) {
         fail(context, `feedback.${feedback.id}.from_id`, error instanceof Error ? error.message : String(error));
       }
+      decodeEntityId(context, feedback.from_id, fromType, `feedback.${feedback.id}.from_id`);
       if (fromType !== "issue" || entityType !== "issue" || entity.id !== feedback.from_id) {
         fail(context, `feedback.${feedback.id}.from_id`, `issue-originated feedback must be stored only on ${feedback.from_id}`);
       }
       continue;
-    }
-    let toType: EntityType;
-    try {
-      toType = getEntityTypeFromId(feedback.to_id);
-    } catch (error) {
-      fail(context, `feedback.${feedback.id}.to_id`, error instanceof Error ? error.message : String(error));
     }
     if (entityType !== toType || entity.id !== feedback.to_id) {
       fail(context, `feedback.${feedback.id}.to_id`, `anonymous feedback must be stored only on its target ${feedback.to_id}`);
@@ -441,29 +473,166 @@ function validateFeedbackOwnership(
   }
 }
 
-function readSnapshotLines<T extends SpecJSONL | IssueJSONL | AdrJSONL>(
+type SnapshotDecoders = {
+  [K in EntityType]: (context: DecodeContext, value: unknown) => EntitySnapshot<K>;
+};
+
+const SNAPSHOT_DECODERS = {
+  spec: decodeSpec,
+  issue: decodeIssue,
+  adr: decodeAdr,
+} satisfies SnapshotDecoders;
+
+function decodeSelectedSnapshot<K extends EntityType>(
+  decoder: SnapshotDecoders[K],
+  context: DecodeContext,
+  value: unknown
+): EntitySnapshot<K> {
+  return decoder(context, value);
+}
+
+export function decodeSnapshotValue<K extends EntityType>(
+  entityType: K,
+  context: DecodeContext,
+  value: unknown
+): EntitySnapshot<K> {
+  return decodeSelectedSnapshot(SNAPSHOT_DECODERS[entityType], context, value);
+}
+
+export function decodeSnapshotLine<K extends EntityType>(
   filePath: string,
-  entityType: EntityType,
-  decode: (context: DecodeContext, value: unknown) => T,
-  feedbackIds: Set<string>
-): T[] {
-  if (!fs.existsSync(filePath)) return [];
-  const lines = fs.readFileSync(filePath, "utf8").split("\n");
-  const entities: T[] = [];
+  entityType: K,
+  line: string,
+  lineNumber: number,
+  feedbackIds = new Set<string>()
+): EntitySnapshot<K> | null {
+  if (line.trim() === "") return null;
+  const context = { filePath, lineNumber };
+  if (/^(<{7}|={7}|>{7}|\|{7})/.test(line)) {
+    throw new SnapshotDecodeError(
+      filePath,
+      lineNumber,
+      "$",
+      "unresolved git conflict marker",
+      "Run `sudocode resolve-conflicts` (add `--dry-run` to preview), then retry."
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch (error) {
+    fail(context, "$", error instanceof Error ? error.message : String(error));
+  }
+  const entity = decodeSnapshotValue(entityType, context, value);
+  validateFeedbackOwnership(context, entityType, entity, feedbackIds);
+  return entity;
+}
+
+export function decodeSnapshotContent<K extends EntityType>(
+  filePath: string,
+  entityType: K,
+  content: string,
+  feedbackIds = new Set<string>(),
+  firstLineNumber = 1
+): EntitySnapshot<K>[] {
+  const lines = content.split("\n");
+  const entities: EntitySnapshot<K>[] = [];
   for (const [index, line] of lines.entries()) {
-    if (line.trim() === "") continue;
-    const context = { filePath, lineNumber: index + 1 };
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch (error) {
-      fail(context, "$", error instanceof Error ? error.message : String(error));
-    }
-    const entity = decode(context, value);
-    validateFeedbackOwnership(context, entityType, entity, feedbackIds);
-    entities.push(entity);
+    const entity = decodeSnapshotLine(
+      filePath,
+      entityType,
+      line,
+      firstLineNumber + index,
+      feedbackIds
+    );
+    if (entity !== null) entities.push(entity);
   }
   return entities;
+}
+
+export function validateSnapshotEntities<K extends EntityType>(
+  filePath: string,
+  entityType: K,
+  entities: readonly unknown[],
+  feedbackIds = new Set<string>()
+): EntitySnapshot<K>[] {
+  const content = entities.map((entity) => JSON.stringify(entity)).join("\n");
+  return decodeSnapshotContent(filePath, entityType, content, feedbackIds);
+}
+
+function missingSnapshotFile(filePath: string, entityType: EntityType): never {
+  throw new SnapshotDecodeError(
+    filePath,
+    0,
+    "$",
+    "required snapshot file is missing",
+    `Restore it with \`git checkout -- ${filePath}\`, or create an empty file to declare that no ${getEntityRow(entityType).pluralLabel} exist, then retry.`
+  );
+}
+
+export function inferSnapshotEntityType(
+  filePaths: readonly string[]
+): EntityType | null {
+  for (const filePath of filePaths) {
+    const row = ENTITY_ROWS.find(
+      (candidate) => candidate.jsonlFile === path.basename(filePath)
+    );
+    if (row) return row.type;
+  }
+  for (const filePath of filePaths) {
+    if (!fs.existsSync(filePath)) {
+      throw new SnapshotDecodeError(
+        filePath,
+        0,
+        "$",
+        "merge input file is missing",
+        "Rerun the merge so git supplies every stage file."
+      );
+    }
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
+    for (const [index, line] of lines.entries()) {
+      if (line.trim() === "") continue;
+      const context = { filePath, lineNumber: index + 1 };
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch (error) {
+        fail(context, "$", error instanceof Error ? error.message : String(error));
+      }
+      if (!isRecord(parsed)) fail(context, "$", `expected an object, received ${describe(parsed)}`);
+      const id = requiredString(context, parsed, "id");
+      try {
+        return getEntityTypeFromId(id);
+      } catch (error) {
+        fail(context, "id", error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+  return null;
+}
+
+export function readEntitySnapshotFile<K extends EntityType>(
+  filePath: string,
+  entityType: K,
+  feedbackIds = new Set<string>()
+): EntitySnapshot<K>[] {
+  if (!fs.existsSync(filePath)) missingSnapshotFile(filePath, entityType);
+  return decodeSnapshotContent(
+    filePath,
+    entityType,
+    fs.readFileSync(filePath, "utf8"),
+    feedbackIds
+  );
+}
+
+export type SnapshotFileNames = Partial<Record<EntityType, string>>;
+
+export function snapshotFilePath(
+  inputDir: string,
+  entityType: EntityType,
+  fileNames: SnapshotFileNames = {}
+): string {
+  return path.join(inputDir, fileNames[entityType] ?? getEntityRow(entityType).jsonlFile);
 }
 
 export function readPersistedSnapshot(
@@ -471,12 +640,9 @@ export function readPersistedSnapshot(
   fileNames: SnapshotFileNames = {}
 ): EntitySnapshots {
   const feedbackIds = new Set<string>();
-  const specFile = fileNames.spec ?? getEntityRow("spec").jsonlFile;
-  const issueFile = fileNames.issue ?? getEntityRow("issue").jsonlFile;
-  const adrFile = fileNames.adr ?? getEntityRow("adr").jsonlFile;
   return {
-    spec: readSnapshotLines(path.join(inputDir, specFile), "spec", decodeSpec, feedbackIds),
-    issue: readSnapshotLines(path.join(inputDir, issueFile), "issue", decodeIssue, feedbackIds),
-    adr: readSnapshotLines(path.join(inputDir, adrFile), "adr", decodeAdr, feedbackIds),
+    spec: readEntitySnapshotFile(snapshotFilePath(inputDir, "spec", fileNames), "spec", feedbackIds),
+    issue: readEntitySnapshotFile(snapshotFilePath(inputDir, "issue", fileNames), "issue", feedbackIds),
+    adr: readEntitySnapshotFile(snapshotFilePath(inputDir, "adr", fileNames), "adr", feedbackIds),
   };
 }

@@ -2,7 +2,12 @@
  * Validation utilities for sudocode CLI
  */
 
-import type { RelationshipType, IssueStatus, FeedbackType } from "./types.js";
+import type {
+  RelationshipType,
+  IssueStatus,
+  FeedbackAnchor,
+  FeedbackType,
+} from "./types.js";
 import { InputError } from "@sudocode-ai/types/errors";
 
 /**
@@ -77,6 +82,22 @@ const VALID_FEEDBACK_TYPES = new Set<FeedbackType>([
 
 export function isValidFeedbackType(type: string): type is FeedbackType {
   return VALID_FEEDBACK_TYPES.has(type as FeedbackType);
+}
+
+type AnchorStatus = FeedbackAnchor["anchor_status"];
+
+const VALID_ANCHOR_STATUSES = [
+  "valid",
+  "relocated",
+  "stale",
+] as const satisfies readonly AnchorStatus[];
+
+export function isValidAnchorStatus(value: unknown): value is AnchorStatus {
+  return VALID_ANCHOR_STATUSES.some((status) => status === value);
+}
+
+export function getValidAnchorStatuses(): string[] {
+  return [...VALID_ANCHOR_STATUSES];
 }
 
 export function getValidFeedbackTypes(): string[] {

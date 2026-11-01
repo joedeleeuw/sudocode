@@ -8,15 +8,21 @@
  */
 
 import * as fs from "fs";
-import type { IssueJSONL, AdrJSONL, SpecJSONL } from "./types.js";
+import type { JSONLEntity } from "./jsonl.js";
 import { toYaml, fromYaml } from "./yaml-converter.js";
 import { mergeYamlContent } from "./git-merge.js";
+import type { EntityType } from "@sudocode-ai/types";
+import { getEntityTypeFromId } from "@sudocode-ai/types/entities";
 import {
-  resolveIdentityCollisions,
-  type IdentityRecord,
+  assignIdentities,
+  createReferenceNamespace,
+  remapEntityReferences,
+  IdentityResolutionError,
+  type IdentityAssignment,
+  type IdentityClaim,
+  type ReferenceNamespace,
 } from "./identity-collisions.js";
-
-export type JSONLEntity = IssueJSONL | AdrJSONL | SpecJSONL | (Record<string, any> & IdentityRecord);
+import { normalizeMirrorPath } from "./snapshot.js";
 
 /**
  * Conflict section from parsing git conflict markers
@@ -38,13 +44,6 @@ export interface ConflictMarker {
   end: number;
   oursLabel: string;
   theirsLabel: string;
-}
-
-/**
- * Resolution options
- */
-export interface ResolveOptions {
-  verbose?: boolean;
 }
 
 /**
@@ -229,60 +228,18 @@ function compareTimestamps(
  * USE FOR: Two-way merge scenarios (manual conflict resolution)
  * Merges both array fields (union) and scalar fields (latest-wins)
  */
-export function mergeMetadata<T extends JSONLEntity>(entities: T[]): T {
-  // Sort by updated_at, keep most recent as base
-  const sorted = [...entities].sort((a, b) =>
+function latestVersion<T extends JSONLEntity>(entities: readonly T[]): T {
+  const [latest] = [...entities].sort((a, b) =>
     compareTimestamps(b.updated_at, a.updated_at),
   );
-
-  const base = { ...sorted[0] };
-
-  // Merge relationships (union of unique)
-  const relationshipSet = new Set<string>();
-  for (const entity of entities) {
-    if ((entity as any).relationships) {
-      for (const rel of (entity as any).relationships) {
-        relationshipSet.add(JSON.stringify(rel));
-      }
-    }
+  if (latest === undefined) {
+    throw new IdentityResolutionError("Cannot merge an empty set of versions");
   }
-  if (relationshipSet.size > 0) {
-    (base as any).relationships = Array.from(relationshipSet).map((r) =>
-      JSON.parse(r),
-    );
-  }
+  return latest;
+}
 
-  // Merge tags (union of unique)
-  const tagSet = new Set<string>();
-  for (const entity of entities) {
-    if ((entity as any).tags) {
-      for (const tag of (entity as any).tags) {
-        tagSet.add(tag);
-      }
-    }
-  }
-  if (tagSet.size > 0) {
-    (base as any).tags = Array.from(tagSet);
-  }
-
-  // Merge feedback if present (union of unique by id)
-  if ((entities[0] as any).feedback) {
-    const feedbackMap = new Map<string, any>();
-    for (const entity of entities) {
-      if ((entity as any).feedback) {
-        for (const fb of (entity as any).feedback) {
-          if (!feedbackMap.has(fb.id)) {
-            feedbackMap.set(fb.id, fb);
-          }
-        }
-      }
-    }
-    if (feedbackMap.size > 0) {
-      (base as any).feedback = Array.from(feedbackMap.values());
-    }
-  }
-
-  return base;
+export function mergeMetadata<T extends JSONLEntity>(entities: T[]): T {
+  return { ...latestVersion(entities), ...mergeArrayFields(entities) };
 }
 
 /**
@@ -295,54 +252,49 @@ export function mergeMetadata<T extends JSONLEntity>(entities: T[]): T {
  * This allows git merge-file to see actual differences in scalar fields
  * for proper three-way merge semantics.
  */
-export function mergeArrayFields<T extends JSONLEntity>(
-  entities: T[],
-): Partial<T> {
-  const result: Partial<T> = {};
+type ArrayFields = Partial<Pick<JSONLEntity, "relationships" | "tags" | "feedback">>;
 
-  // Merge relationships (union of unique)
-  const relationshipSet = new Set<string>();
+export function mergeArrayFields(entities: readonly JSONLEntity[]): ArrayFields {
+  const result: ArrayFields = {};
+
+  const relationships = new Map<string, JSONLEntity["relationships"][number]>();
   for (const entity of entities) {
-    if ((entity as any).relationships) {
-      for (const rel of (entity as any).relationships) {
-        relationshipSet.add(JSON.stringify(rel));
-      }
+    for (const relationship of entity.relationships) {
+      relationships.set(JSON.stringify(relationship), relationship);
     }
   }
-  if (relationshipSet.size > 0) {
-    (result as any).relationships = Array.from(relationshipSet).map((r) =>
-      JSON.parse(r),
-    );
+  if (relationships.size > 0) {
+    result.relationships = Array.from(relationships.values());
   }
 
-  // Merge tags (union of unique)
   const tagSet = new Set<string>();
   for (const entity of entities) {
-    if ((entity as any).tags) {
-      for (const tag of (entity as any).tags) {
-        tagSet.add(tag);
-      }
-    }
+    for (const tag of entity.tags) tagSet.add(tag);
   }
   if (tagSet.size > 0) {
-    (result as any).tags = Array.from(tagSet);
+    result.tags = Array.from(tagSet);
   }
 
-  // Merge feedback if present (union of unique by id)
-  const hasFeedback = entities.some((e) => (e as any).feedback);
-  if (hasFeedback) {
-    const feedbackMap = new Map<string, any>();
+  if (entities.some((entity) => entity.feedback !== undefined)) {
+    const feedbackMap = new Map<string, NonNullable<JSONLEntity["feedback"]>[number]>();
     for (const entity of entities) {
-      if ((entity as any).feedback) {
-        for (const fb of (entity as any).feedback) {
-          if (!feedbackMap.has(fb.id)) {
-            feedbackMap.set(fb.id, fb);
-          }
+      for (const fb of entity.feedback ?? []) {
+        const existing = feedbackMap.get(fb.id);
+        if (!existing) {
+          feedbackMap.set(fb.id, fb);
+          continue;
+        }
+        const cmp = compareTimestamps(fb.updated_at, existing.updated_at);
+        if (cmp > 0 || (cmp === 0 && JSON.stringify(fb) > JSON.stringify(existing))) {
+          feedbackMap.set(fb.id, fb);
         }
       }
     }
     if (feedbackMap.size > 0) {
-      (result as any).feedback = Array.from(feedbackMap.values());
+      result.feedback = Array.from(feedbackMap.values()).sort((a, b) => {
+        const cmp = compareTimestamps(a.created_at, b.created_at);
+        return cmp !== 0 ? cmp : a.id.localeCompare(b.id);
+      });
     }
   }
 
@@ -394,99 +346,66 @@ export function resolveYamlConflicts(
   return resolved.join("\n");
 }
 
-/**
- * Resolve all entities using UUID-based deduplication
- * Handles different UUIDs, same UUID conflicts, and metadata merging
- *
- * USE CASE: TWO-WAY MERGE
- * - Manual conflict resolution (sudocode resolve-conflicts)
- * - Conflicts already isolated by git conflict markers
- * - No base version available (git index cleared after conflict)
- * - Simple UUID deduplication is sufficient and faster
- * - No benefit from YAML expansion overhead
- *
- * DO NOT USE FOR: Three-way merge with base/ours/theirs
- * For that case, use mergeThreeWay() instead.
- */
-export function resolveEntities<T extends JSONLEntity>(
-  entities: T[],
-  options: ResolveOptions = {},
-): ResolvedResult<T> {
-  const stats: ResolutionStats = {
-    totalInput: entities.length,
-    totalOutput: 0,
-    conflicts: [],
-  };
+function entityTypeOf(entity: JSONLEntity): EntityType {
+  return getEntityTypeFromId(entity.id);
+}
 
-  // Group entities by UUID
-  const byUuid = new Map<string, T[]>();
-  for (const entity of entities) {
-    if (!byUuid.has(entity.uuid)) {
-      byUuid.set(entity.uuid, []);
-    }
-    byUuid.get(entity.uuid)!.push(entity);
-  }
-
-  const resolved: T[] = [];
-
-  // Process each UUID group
-  for (const [uuid, group] of Array.from(byUuid.entries())) {
-    if (group.length === 1) {
-      // No conflict - single entity with this UUID
-      resolved.push(group[0]);
-      continue;
-    }
-
-    // Check if all have same ID
-    const ids = new Set(group.map((e) => e.id));
-
-    if (ids.size === 1) {
-      // Same UUID, same ID → Keep most recent, merge metadata
-      const merged = mergeMetadata(group);
-      resolved.push(merged);
-
-      stats.conflicts.push({
-        type: "same-uuid-same-id",
-        uuid,
-        originalIds: [group[0].id],
-        resolvedIds: [merged.id],
-        action: `Kept most recent version, merged ${group.length} versions`,
-      });
-    } else {
-      // Same UUID, different IDs → Keep all, rename duplicates
-      const sorted = [...group].sort((a, b) =>
-        compareTimestamps(a.updated_at, b.updated_at),
+function sideNamespace(side: readonly JSONLEntity[]): ReferenceNamespace {
+  const uuids = new Set<string>();
+  for (const entity of side) {
+    if (uuids.has(entity.uuid)) {
+      throw new IdentityResolutionError(
+        `UUID ${entity.uuid} appears more than once in one merge side; remove the duplicate line, then retry`
       );
-
-      // Keep most recent ID as-is
-      const keeper = sorted[sorted.length - 1];
-      resolved.push(keeper);
-
-      const originalIds: string[] = [];
-      const resolvedIds: string[] = [keeper.id];
-
-      // Rename older versions
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const entity = { ...sorted[i] } as T;
-        originalIds.push(entity.id);
-
-        resolvedIds.push(entity.id);
-        resolved.push(entity);
-      }
-
-      stats.conflicts.push({
-        type: "same-uuid-different-id",
-        uuid,
-        originalIds,
-        resolvedIds,
-        action: `Renamed ${sorted.length - 1} conflicting IDs`,
-      });
     }
+    uuids.add(entity.uuid);
   }
+  return createReferenceNamespace(
+    side.map(entityTypeOf),
+    false,
+    side.map((entity) => ({
+      entityType: entityTypeOf(entity),
+      id: entity.id,
+      uuid: entity.uuid,
+    })),
+  );
+}
 
-  const identityResolution = resolveIdentityCollisions(resolved);
-  const finalResolved = identityResolution.entities;
-  for (const collision of identityResolution.collisions) {
+function identityClaim(entity: JSONLEntity, id = entity.id, filePath?: string): IdentityClaim {
+  const entityType = entityTypeOf(entity);
+  const preferredPath =
+    filePath ?? ("file_path" in entity ? entity.file_path : undefined);
+  return {
+    entityType,
+    uuid: entity.uuid,
+    id,
+    filePath:
+      preferredPath === undefined
+        ? undefined
+        : normalizeMirrorPath(preferredPath),
+    createdAt: entity.created_at,
+    fixed: false,
+  };
+}
+
+function remapVersion<T extends JSONLEntity>(
+  entity: T,
+  namespace: ReferenceNamespace,
+  assignment: IdentityAssignment,
+): T {
+  return remapEntityReferences(
+    entityTypeOf(entity),
+    entity,
+    namespace,
+    assignment.identities,
+  );
+}
+
+function recordCollisions(
+  stats: ResolutionStats,
+  assignment: IdentityAssignment,
+): void {
+  for (const collision of assignment.collisions) {
     stats.conflicts.push({
       type: "different-uuids",
       uuid: collision.uuid,
@@ -495,19 +414,80 @@ export function resolveEntities<T extends JSONLEntity>(
       action: `Renamed ${collision.oldId} to ${collision.newId} to resolve an identity collision`,
     });
   }
+}
 
-  // Sort by created_at (git-friendly)
-  finalResolved.sort((a, b) => {
-    const aDate = a.created_at || "";
-    const bDate = b.created_at || "";
-    if (aDate < bDate) return -1;
-    if (aDate > bDate) return 1;
-    return (a.id || "").localeCompare(b.id || "");
+function sortForSnapshot<T extends JSONLEntity>(entities: T[]): T[] {
+  return entities.sort((a, b) => {
+    if (a.created_at < b.created_at) return -1;
+    if (a.created_at > b.created_at) return 1;
+    return a.id.localeCompare(b.id);
   });
+}
 
-  stats.totalOutput = finalResolved.length;
+/**
+ * Two-way merge of complete snapshot sides (no base available).
+ *
+ * Each side is resolved in its own ID namespace: identities are assigned by
+ * UUID first, then every reference a side wrote is remapped through that
+ * side's IDs before versions of the same UUID are merged.
+ */
+export function resolveEntities<T extends JSONLEntity>(
+  sides: readonly (readonly T[])[],
+): ResolvedResult<T> {
+  const stats: ResolutionStats = {
+    totalInput: sides.reduce((total, side) => total + side.length, 0),
+    totalOutput: 0,
+    conflicts: [],
+  };
+  const namespaces = sides.map(sideNamespace);
+  const groups = new Map<string, Array<{ side: number; entity: T }>>();
+  sides.forEach((side, sideIndex) => {
+    for (const entity of side) {
+      const versions = groups.get(entity.uuid) ?? [];
+      versions.push({ side: sideIndex, entity });
+      groups.set(entity.uuid, versions);
+    }
+  });
+  const assignment = assignIdentities(
+    Array.from(groups.values(), (versions) =>
+      identityClaim(latestVersion(versions.map(({ entity }) => entity))),
+    ),
+    { ids: [], filePaths: [] },
+  );
+  const resolved: T[] = [];
+  for (const [uuid, versions] of groups) {
+    const remapped = versions.map(({ side, entity }) =>
+      remapVersion(entity, namespaces[side], assignment),
+    );
+    const merged = remapped.length === 1 ? remapped[0] : mergeMetadata(remapped);
+    const distinct = new Set(remapped.map((entity) => JSON.stringify(entity)));
+    if (distinct.size > 1) {
+      const originalIds = Array.from(new Set(versions.map(({ entity }) => entity.id)));
+      stats.conflicts.push({
+        type: originalIds.length > 1 ? "same-uuid-different-id" : "same-uuid-same-id",
+        uuid,
+        originalIds,
+        resolvedIds: [merged.id],
+        action: `Kept most recent version, merged ${remapped.length} versions`,
+      });
+    }
+    resolved.push(merged);
+  }
+  recordCollisions(stats, assignment);
+  sortForSnapshot(resolved);
+  stats.totalOutput = resolved.length;
+  return { entities: resolved, stats };
+}
 
-  return { entities: finalResolved, stats };
+function threeWayChoice<V>(
+  base: V,
+  ours: V,
+  theirs: V,
+  oursNewer: boolean,
+): { value: V; conflict: boolean } {
+  if (base === ours) return { value: theirs, conflict: false };
+  if (base === theirs || ours === theirs) return { value: ours, conflict: false };
+  return { value: oursNewer ? ours : theirs, conflict: true };
 }
 
 /**
@@ -579,7 +559,8 @@ function mergeYamlWithGit<T extends JSONLEntity>(
  * 3. Merge array fields FIRST (tags, relationships, feedback) with union semantics
  * 4. Field-level three-way merge for SCALAR fields only (status, priority, etc.)
  * 5. YAML + git merge-file for multi-line text fields (content, description)
- * 6. Handle ID collisions (hash conflicts with .1, .2 suffixes)
+ * 6. Assign identities by UUID before merging; each side's references are
+ *    remapped through that side's own ID namespace
  * 7. Sort by created_at (git-friendly)
  *
  * Field-level three-way merge logic:
@@ -589,6 +570,127 @@ function mergeYamlWithGit<T extends JSONLEntity>(
  * - If base != ours && base != theirs && ours == theirs: use either (both made same change)
  * - If base != ours && base != theirs && ours != theirs: conflict -> latest wins
  */
+type ThreeWayVersions<T> = { base?: T; ours?: T; theirs?: T };
+
+type ThreeWayPlan<T> =
+  | { kind: "single"; side: "ours" | "theirs"; entity: T; deletedOn?: "ours" | "theirs" }
+  | { kind: "pair"; ours: T; theirs: T }
+  | { kind: "three"; base: T; ours: T; theirs: T };
+
+function planThreeWay<T>(versions: ThreeWayVersions<T>): ThreeWayPlan<T> | null {
+  const { base, ours, theirs } = versions;
+  if (ours && theirs) {
+    return base ? { kind: "three", base, ours, theirs } : { kind: "pair", ours, theirs };
+  }
+  if (ours) return { kind: "single", side: "ours", entity: ours, deletedOn: base ? "theirs" : undefined };
+  if (theirs) return { kind: "single", side: "theirs", entity: theirs, deletedOn: base ? "ours" : undefined };
+  return null;
+}
+
+function threeWayClaim<T extends JSONLEntity>(plan: ThreeWayPlan<T>): IdentityClaim {
+  if (plan.kind === "single") return identityClaim(plan.entity);
+  if (plan.kind === "pair") return identityClaim(latestVersion([plan.ours, plan.theirs]));
+  const oursNewer = compareTimestamps(plan.ours.updated_at, plan.theirs.updated_at) >= 0;
+  const filePath = (entity: T): string | undefined =>
+    "file_path" in entity ? entity.file_path : undefined;
+  return identityClaim(
+    plan.ours,
+    threeWayChoice(plan.base.id, plan.ours.id, plan.theirs.id, oursNewer).value,
+    threeWayChoice(filePath(plan.base), filePath(plan.ours), filePath(plan.theirs), oursNewer).value,
+  );
+}
+
+function mergeThreeVersions<T extends JSONLEntity>(
+  uuid: string,
+  baseEntity: T,
+  oursEntity: T,
+  theirsEntity: T,
+  stats: ResolutionStats,
+): T {
+  const arrayFieldsMerged = mergeArrayFields([baseEntity, oursEntity, theirsEntity]);
+
+  const allFields = new Set<string>();
+  for (const entity of [baseEntity, oursEntity, theirsEntity]) {
+    for (const key of Object.keys(entity)) {
+      if (key === "relationships" || key === "tags" || key === "feedback") continue;
+      allFields.add(key);
+    }
+  }
+
+  const fieldsMerged: Record<string, unknown> = { ...arrayFieldsMerged };
+  const scalarConflicts: string[] = [];
+  const multiLineFields = new Set(["content", "description"]);
+  const oursNewer =
+    compareTimestamps(oursEntity.updated_at, theirsEntity.updated_at) >= 0;
+  const latestUpdatedAt =
+    compareTimestamps(oursEntity.updated_at, theirsEntity.updated_at) > 0
+      ? oursEntity.updated_at
+      : theirsEntity.updated_at;
+
+  for (const field of allFields) {
+    if (multiLineFields.has(field) || field === "updated_at") continue;
+    const choice = threeWayChoice(
+      baseEntity[field as keyof T],
+      oursEntity[field as keyof T],
+      theirsEntity[field as keyof T],
+      oursNewer,
+    );
+    fieldsMerged[field] = choice.value;
+    if (choice.conflict) scalarConflicts.push(field);
+  }
+
+  const multiLineFieldsIdentical = Array.from(multiLineFields).every((field) => {
+    const baseValue = baseEntity[field as keyof T];
+    return (
+      baseValue === oursEntity[field as keyof T] &&
+      baseValue === theirsEntity[field as keyof T]
+    );
+  });
+
+  let mergedEntity: T;
+  let hadYamlConflicts = false;
+  if (scalarConflicts.length === 0 && multiLineFieldsIdentical) {
+    mergedEntity = { ...oursEntity, ...fieldsMerged } as T;
+  } else {
+    const versionsForYaml = {
+      base: { ...baseEntity, ...fieldsMerged, updated_at: undefined },
+      ours: { ...oursEntity, ...fieldsMerged, updated_at: undefined },
+      theirs: { ...theirsEntity, ...fieldsMerged, updated_at: undefined },
+    };
+    const yamlMergeResult = mergeYamlWithGit(versionsForYaml, {
+      ours: oursEntity.updated_at,
+      theirs: theirsEntity.updated_at,
+    });
+    hadYamlConflicts = yamlMergeResult.hadConflicts;
+    if (yamlMergeResult.success) {
+      mergedEntity = { ...yamlMergeResult.entity, ...arrayFieldsMerged } as T;
+    } else {
+      mergedEntity = (oursNewer ? versionsForYaml.ours : versionsForYaml.theirs) as T;
+    }
+  }
+  mergedEntity.updated_at = latestUpdatedAt;
+
+  if (scalarConflicts.length > 0 || hadYamlConflicts) {
+    const conflictParts = [];
+    if (scalarConflicts.length > 0) {
+      conflictParts.push(
+        `${scalarConflicts.length} scalar field conflicts (${scalarConflicts.join(", ")})`,
+      );
+    }
+    if (hadYamlConflicts) {
+      conflictParts.push("YAML conflict blocks (latest-wins per block)");
+    }
+    stats.conflicts.push({
+      type: "same-uuid-same-id",
+      uuid,
+      originalIds: [baseEntity.id],
+      resolvedIds: [mergedEntity.id],
+      action: `Resolved ${conflictParts.join(", ")}`,
+    });
+  }
+  return mergedEntity;
+}
+
 export function mergeThreeWay<T extends JSONLEntity>(
   base: T[],
   ours: T[],
@@ -599,294 +701,70 @@ export function mergeThreeWay<T extends JSONLEntity>(
     totalOutput: 0,
     conflicts: [],
   };
-
-  // Step 1: Group entities by UUID across all three versions
-  const byUuid = new Map<
-    string,
-    {
-      base?: T;
-      ours?: T;
-      theirs?: T;
+  const namespaces = {
+    base: sideNamespace(base),
+    ours: sideNamespace(ours),
+    theirs: sideNamespace(theirs),
+  };
+  const byUuid = new Map<string, ThreeWayVersions<T>>();
+  for (const [side, entities] of [["base", base], ["ours", ours], ["theirs", theirs]] as const) {
+    for (const entity of entities) {
+      byUuid.set(entity.uuid, { ...byUuid.get(entity.uuid), [side]: entity });
     }
-  >();
+  }
 
-  // Populate from all three versions
-  for (const entity of base) {
-    const existing = byUuid.get(entity.uuid) || {};
-    byUuid.set(entity.uuid, { ...existing, base: entity });
+  const plans: Array<[string, ThreeWayPlan<T>]> = [];
+  for (const [uuid, versions] of byUuid) {
+    const plan = planThreeWay(versions);
+    if (plan) plans.push([uuid, plan]);
   }
-  for (const entity of ours) {
-    const existing = byUuid.get(entity.uuid) || {};
-    byUuid.set(entity.uuid, { ...existing, ours: entity });
-  }
-  for (const entity of theirs) {
-    const existing = byUuid.get(entity.uuid) || {};
-    byUuid.set(entity.uuid, { ...existing, theirs: entity });
-  }
+  const assignment = assignIdentities(
+    plans.map(([, plan]) => threeWayClaim(plan)),
+    { ids: [], filePaths: [] },
+  );
+  const remap = (entity: T, side: keyof typeof namespaces): T =>
+    remapVersion(entity, namespaces[side], assignment);
 
   const mergedEntities: T[] = [];
-
-  // Step 2: Process each UUID group
-  for (const [uuid, versions] of Array.from(byUuid.entries())) {
-    const {
-      base: baseEntity,
-      ours: oursEntity,
-      theirs: theirsEntity,
-    } = versions;
-
-    // Step 2a: Handle deletion cases
-    // Deleted in both → skip
-    if (!oursEntity && !theirsEntity) {
+  for (const [uuid, plan] of plans) {
+    if (plan.kind === "single") {
+      const entity = remap(plan.entity, plan.side);
+      if (plan.deletedOn) {
+        stats.conflicts.push({
+          type: "same-uuid-same-id",
+          uuid,
+          originalIds: [plan.entity.id],
+          resolvedIds: [entity.id],
+          action: `Kept ${plan.side} (deleted in ${plan.deletedOn}, modified in ${plan.side})`,
+        });
+      }
+      mergedEntities.push(entity);
       continue;
     }
-
-    // Deleted in theirs, modified in ours → modification wins
-    if (baseEntity && !theirsEntity && oursEntity) {
-      mergedEntities.push(oursEntity);
+    if (plan.kind === "pair") {
+      const merged = mergeMetadata([remap(plan.ours, "ours"), remap(plan.theirs, "theirs")]);
       stats.conflicts.push({
         type: "same-uuid-same-id",
         uuid,
-        originalIds: [baseEntity.id],
-        resolvedIds: [oursEntity.id],
-        action: `Kept ours (deleted in theirs, modified in ours)`,
+        originalIds: Array.from(new Set([plan.ours.id, plan.theirs.id])),
+        resolvedIds: [merged.id],
+        action: "Added on both sides; kept most recent version, merged 2 versions",
       });
+      mergedEntities.push(merged);
       continue;
     }
-
-    // Deleted in ours, modified in theirs → modification wins
-    if (baseEntity && !oursEntity && theirsEntity) {
-      mergedEntities.push(theirsEntity);
-      stats.conflicts.push({
-        type: "same-uuid-same-id",
+    mergedEntities.push(
+      mergeThreeVersions(
         uuid,
-        originalIds: [baseEntity.id],
-        resolvedIds: [theirsEntity.id],
-        action: `Kept theirs (deleted in ours, modified in theirs)`,
-      });
-      continue;
-    }
-
-    // Added in only one side (no base)
-    if (!baseEntity && oursEntity && !theirsEntity) {
-      mergedEntities.push(oursEntity);
-      continue;
-    }
-    if (!baseEntity && !oursEntity && theirsEntity) {
-      mergedEntities.push(theirsEntity);
-      continue;
-    }
-
-    // Added in both sides (no base) → use standard resolution
-    if (!baseEntity && oursEntity && theirsEntity) {
-      const resolved = resolveEntities([oursEntity, theirsEntity]);
-      mergedEntities.push(...resolved.entities);
-      stats.conflicts.push(...resolved.stats.conflicts);
-      continue;
-    }
-
-    // Check if IDs match - if not, this is an ID conflict
-    // In three-way merge, keep ours and theirs (they both moved from base)
-    const ids = new Set(
-      [baseEntity?.id, oursEntity?.id, theirsEntity?.id].filter(Boolean),
+        remap(plan.base, "base"),
+        remap(plan.ours, "ours"),
+        remap(plan.theirs, "theirs"),
+        stats,
+      ),
     );
-    if (ids.size > 1) {
-      // IDs don't match - ID conflict
-      // Only keep ours and theirs (not base, since both sides moved away from it)
-      const versionsToResolve = [oursEntity, theirsEntity].filter(
-        (e): e is T => e !== undefined,
-      );
-      const resolved = resolveEntities(versionsToResolve);
-      mergedEntities.push(...resolved.entities);
-      stats.conflicts.push(...resolved.stats.conflicts);
-      continue;
-    }
-
-    // Step 2b: Merge array fields FIRST (union semantics)
-    const versionsForMetadata = [baseEntity, oursEntity, theirsEntity].filter(
-      (e): e is T => e !== undefined,
-    );
-    const arrayFieldsMerged = mergeArrayFields(versionsForMetadata);
-
-    // Step 2c: Get all fields from any of the three versions (except array fields)
-    const allFields = new Set<string>();
-    for (const entity of [baseEntity, oursEntity, theirsEntity]) {
-      if (entity) {
-        for (const key of Object.keys(entity)) {
-          // Skip array fields (already merged via mergeArrayFields)
-          if (key === "relationships" || key === "tags" || key === "feedback")
-            continue;
-          allFields.add(key);
-        }
-      }
-    }
-
-    // Step 2d: Perform field-level three-way merge for SCALAR fields only
-    // Multi-line text fields (content, description) will be handled by git merge-file
-    const fieldsMerged: Partial<T> = { ...arrayFieldsMerged };
-    const scalarConflicts: string[] = [];
-
-    // Multi-line text fields that should go through git merge-file
-    const multiLineFields = new Set(["content", "description"]);
-
-    // updated_at always differs and causes spurious conflicts - extract latest value
-    const latestUpdatedAt =
-      compareTimestamps(oursEntity?.updated_at, theirsEntity?.updated_at) > 0
-        ? oursEntity?.updated_at
-        : theirsEntity?.updated_at;
-
-    for (const field of allFields) {
-      // Skip multi-line text fields - they'll be handled by git merge-file
-      if (multiLineFields.has(field)) {
-        continue;
-      }
-
-      // Skip updated_at - we'll add it back at the end
-      if (field === "updated_at") {
-        continue;
-      }
-
-      const baseValue = baseEntity?.[field as keyof T];
-      const oursValue = oursEntity?.[field as keyof T];
-      const theirsValue = theirsEntity?.[field as keyof T];
-
-      // Three-way merge logic for scalar fields:
-      // - If base == ours == theirs: use any value
-      // - If base == ours && base != theirs: use theirs (they changed it)
-      // - If base == theirs && base != ours: use ours (we changed it)
-      // - If base != ours && base != theirs && ours == theirs: use either (both made same change)
-      // - If base != ours && base != theirs && ours != theirs: conflict -> latest wins
-
-      if (baseValue === oursValue && baseValue === theirsValue) {
-        // No changes
-        (fieldsMerged as any)[field] = baseValue;
-      } else if (baseValue === oursValue && baseValue !== theirsValue) {
-        // Only theirs changed
-        (fieldsMerged as any)[field] = theirsValue;
-      } else if (baseValue === theirsValue && baseValue !== oursValue) {
-        // Only ours changed
-        (fieldsMerged as any)[field] = oursValue;
-      } else if (oursValue === theirsValue) {
-        // Both made same change
-        (fieldsMerged as any)[field] = oursValue;
-      } else {
-        // Conflict: both changed to different values -> latest wins
-        // When timestamps are identical, prefer ours for stability
-        const oursNewer =
-          compareTimestamps(oursEntity?.updated_at, theirsEntity?.updated_at) >=
-          0;
-        (fieldsMerged as any)[field] = oursNewer ? oursValue : theirsValue;
-        scalarConflicts.push(field);
-      }
-    }
-
-    // Step 2e: FAST PATH - Skip expensive YAML merge if entity is unchanged
-    // Check if all multi-line text fields are identical across versions
-    const multiLineFieldsIdentical = Array.from(multiLineFields).every(
-      (field) => {
-        const baseValue = baseEntity?.[field as keyof T];
-        const oursValue = oursEntity?.[field as keyof T];
-        const theirsValue = theirsEntity?.[field as keyof T];
-        return baseValue === oursValue && oursValue === theirsValue;
-      },
-    );
-
-    let mergedEntity: T;
-    let hadYamlConflicts = false;
-
-    // If no scalar conflicts and multi-line fields are identical, skip YAML merge
-    if (scalarConflicts.length === 0 && multiLineFieldsIdentical) {
-      // Fast path: Entity unchanged, use any version (prefer ours)
-      mergedEntity = { ...oursEntity!, ...fieldsMerged } as T;
-    } else {
-      // Slow path: Need YAML merge for multi-line fields or scalar conflicts exist
-      // For multi-line fields, keep original values for YAML conversion
-      // Git merge-file will handle the line-level merge
-      // Remove updated_at to avoid spurious conflicts in YAML
-      const versionsForYaml = {
-        base: baseEntity
-          ? { ...baseEntity, ...fieldsMerged, updated_at: undefined }
-          : undefined,
-        ours: oursEntity
-          ? { ...oursEntity, ...fieldsMerged, updated_at: undefined }
-          : undefined,
-        theirs: theirsEntity
-          ? { ...theirsEntity, ...fieldsMerged, updated_at: undefined }
-          : undefined,
-      };
-
-      // Step 2f: Convert to YAML and run git merge-file for line-level merging
-      // Pass original timestamps for conflict resolution (since we stripped updated_at from versions)
-      const yamlMergeResult = mergeYamlWithGit(versionsForYaml, {
-        ours: oursEntity?.updated_at,
-        theirs: theirsEntity?.updated_at,
-      });
-      hadYamlConflicts = yamlMergeResult.hadConflicts;
-
-      if (yamlMergeResult.success) {
-        mergedEntity = yamlMergeResult.entity;
-      } else {
-        // Fatal error during merge - fallback to latest-wins for entire entity
-        // When timestamps are identical, prefer ours for stability
-        const oursNewer =
-          compareTimestamps(oursEntity?.updated_at, theirsEntity?.updated_at) >=
-          0;
-        mergedEntity = (
-          oursNewer ? versionsForYaml.ours : versionsForYaml.theirs
-        ) as T;
-      }
-    }
-
-    // Add back the latest updated_at timestamp
-    mergedEntity.updated_at = latestUpdatedAt;
-
-    // Record conflicts if any
-    if (scalarConflicts.length > 0 || hadYamlConflicts) {
-      const conflictParts = [];
-      if (scalarConflicts.length > 0) {
-        conflictParts.push(
-          `${scalarConflicts.length} scalar field conflicts (${scalarConflicts.join(", ")})`,
-        );
-      }
-      if (hadYamlConflicts) {
-        conflictParts.push("YAML conflict blocks (latest-wins per block)");
-      }
-
-      stats.conflicts.push({
-        type: "same-uuid-same-id",
-        uuid,
-        originalIds: [
-          baseEntity?.id || oursEntity?.id || theirsEntity?.id || "unknown",
-        ],
-        resolvedIds: [mergedEntity.id || "unknown"],
-        action: `Resolved ${conflictParts.join(", ")}`,
-      });
-    }
-
-    mergedEntities.push(mergedEntity);
   }
-
-  const identityResolution = resolveIdentityCollisions(mergedEntities);
-  const finalResolved = identityResolution.entities;
-  for (const collision of identityResolution.collisions) {
-    stats.conflicts.push({
-      type: "different-uuids",
-      uuid: collision.uuid,
-      originalIds: [collision.oldId],
-      resolvedIds: [collision.newId],
-      action: `Renamed ${collision.oldId} to ${collision.newId} to resolve an identity collision`,
-    });
-  }
-
-  // Step 4: Sort by created_at (git-friendly)
-  finalResolved.sort((a, b) => {
-    const aDate = a.created_at || "";
-    const bDate = b.created_at || "";
-    if (aDate < bDate) return -1;
-    if (aDate > bDate) return 1;
-    return (a.id || "").localeCompare(b.id || "");
-  });
-
-  stats.totalOutput = finalResolved.length;
-
-  return { entities: finalResolved, stats };
+  recordCollisions(stats, assignment);
+  sortForSnapshot(mergedEntities);
+  stats.totalOutput = mergedEntities.length;
+  return { entities: mergedEntities, stats };
 }

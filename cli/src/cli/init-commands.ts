@@ -144,10 +144,7 @@ export async function performInitialization(
         console.log(chalk.blue("Importing from existing JSONL files..."));
       }
       const { importFromJSONL } = await import("../import.js");
-      const result = await importFromJSONL(database, {
-        inputDir: dir,
-        resolveCollisions: true,
-      });
+      const result = await importFromJSONL(database, { inputDir: dir });
 
       // Report import results
       if (!jsonOutput) {

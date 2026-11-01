@@ -13,7 +13,7 @@ import { syncMarkdownToJSONL, syncJSONLToMarkdown } from "../sync.js";
 import { listSpecs } from "../operations/specs.js";
 import { listAdrs } from "../operations/adrs.js";
 import { listIssues } from "../operations/issues.js";
-import { ENTITY_ROWS, getEntityRow } from "@sudocode-ai/types/entities";
+import { ENTITY_ROWS, getEntityRow, type DocumentEntityType } from "@sudocode-ai/types/entities";
 import {
   generateUniqueFilename,
   findExistingEntityFile,
@@ -241,7 +241,7 @@ async function handleSyncToMarkdown(ctx: CommandContext): Promise<void> {
   let errorCount = 0;
 
   const documents: Array<{
-    entityType: "spec" | "adr";
+    entityType: DocumentEntityType;
     entities: Array<{ id: string; title: string; file_path: string }>;
   }> = [
     { entityType: "spec", entities: listSpecs(ctx.db) },

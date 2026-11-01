@@ -6,7 +6,7 @@ import matter from "gray-matter";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
 import { findEntity } from "./operations/entities.js";
-import { getEntityTypeFromId } from "@sudocode-ai/types/entities";
+import { ENTITY_ROWS, getEntityTypeFromId } from "@sudocode-ai/types/entities";
 import { createFeedbackAnchor } from "./operations/feedback-anchors.js";
 import type { EntityType, LocationAnchor } from "@sudocode-ai/types";
 
@@ -153,8 +153,10 @@ export function extractCrossReferences(
   // - [[i-x7k9|Display Text]]
   // - [[i-x7k9]]{ blocks }
   // - [[i-x7k9]]{ type: depends-on }
-  const refPattern =
-    /\[\[(@)?([isa]-[0-9a-z]{4,8})(?:\|([^\]]+))?\]\](?:\{\s*(?:type:\s*)?([a-z-]+)\s*\})?/gi;
+  const refPattern = new RegExp(
+    `\\[\\[(@)?((?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8})(?:\\|([^\\]]+))?\\]\\](?:\\{\\s*(?:type:\\s*)?([a-z-]+)\\s*\\})?`,
+    "gi"
+  );
 
   let match: RegExpExecArray | null;
 

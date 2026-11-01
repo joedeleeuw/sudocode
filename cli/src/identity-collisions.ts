@@ -1,32 +1,35 @@
 import * as path from "path";
-import type { FeedbackJSONL, RelationshipJSONL } from "./types.js";
-import type { EntityType } from "@sudocode-ai/types";
+import type {
+  EntityType,
+  FeedbackJSONL,
+  RelationshipJSONL,
+} from "./types.js";
 import {
+  ENTITY_ID_PATTERN_SOURCE,
   getEntityRow,
   getEntityTypeFromId,
 } from "@sudocode-ai/types/entities";
 import { generateCollisionEntityId } from "./id-generator.js";
 
-export interface IdentityRecord {
-  id: string;
-  uuid: string;
-  title?: string;
-  file_path?: string;
-  content?: string;
-  created_at: string;
-  updated_at?: string;
-  parent_id?: string;
-  relationships?: RelationshipJSONL[];
-  feedback?: FeedbackJSONL[];
+export class IdentityResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IdentityResolutionError";
+  }
 }
 
-export interface IdentityRename {
+export interface IdentityClaim {
   entityType: EntityType;
-  oldId: string;
-  newId: string;
   uuid: string;
-  oldFilePath?: string;
-  newFilePath?: string;
+  id: string;
+  filePath?: string;
+  createdAt: string;
+  fixed: boolean;
+}
+
+export interface AssignedIdentity {
+  id: string;
+  filePath?: string;
 }
 
 export interface IdentityCollision {
@@ -34,216 +37,263 @@ export interface IdentityCollision {
   uuid: string;
   oldId: string;
   newId: string;
-  localTitle?: string;
-  incomingTitle?: string;
-  localCreatedAt?: string;
-  incomingCreatedAt?: string;
-  reason: string;
+  oldFilePath?: string;
+  newFilePath?: string;
 }
 
-export interface IdentityResolution<T extends IdentityRecord> {
-  entities: T[];
-  renames: IdentityRename[];
+export interface IdentityAssignment {
+  identities: Map<string, AssignedIdentity>;
   collisions: IdentityCollision[];
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export interface ReservedIdentities {
+  ids: Iterable<string>;
+  filePaths: Iterable<string>;
 }
 
-function uniqueMirrorPath(
-  entityType: EntityType,
+function compareClaims(a: IdentityClaim, b: IdentityClaim): number {
+  if (a.fixed !== b.fixed) return a.fixed ? -1 : 1;
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  return a.uuid.localeCompare(b.uuid);
+}
+
+function allocateId(claim: IdentityClaim, takenIds: ReadonlySet<string>): string {
+  if (!takenIds.has(claim.id)) return claim.id;
+  if (claim.fixed) {
+    throw new IdentityResolutionError(
+      `${getEntityRow(claim.entityType).label} ID ${claim.id} is held by more than one UUID in the cache; rebuild the cache from the snapshot, then retry`
+    );
+  }
+  return generateCollisionEntityId(claim.entityType, claim.uuid, takenIds);
+}
+
+function allocateFilePath(
+  claim: IdentityClaim,
+  filePath: string,
   id: string,
-  takenPaths: Set<string>,
-  preferredPath?: string
-): string | undefined {
-  if (entityType === "issue") return undefined;
-  if (preferredPath && !takenPaths.has(preferredPath)) return preferredPath;
-  const row = getEntityRow(entityType);
-  const extension = preferredPath ? path.posix.extname(preferredPath) || ".md" : ".md";
+  takenPaths: ReadonlySet<string>
+): string {
+  if (!takenPaths.has(filePath)) return filePath;
+  if (claim.fixed) {
+    throw new IdentityResolutionError(
+      `Markdown path ${filePath} is held by more than one UUID in the cache; rebuild the cache from the snapshot, then retry`
+    );
+  }
+  const directory = getEntityRow(claim.entityType).markdownDir;
+  const extension = path.posix.extname(filePath) || ".md";
   for (let suffix = 0; suffix < 1000; suffix++) {
-    const candidate = `${row.markdownDir}/${id}${suffix === 0 ? "" : `-${suffix}`}${extension}`;
+    const candidate = `${directory}/${id}${suffix === 0 ? "" : `-${suffix}`}${extension}`;
     if (!takenPaths.has(candidate)) return candidate;
   }
-  throw new Error(`Failed to allocate a unique Markdown path for ${id}`);
+  throw new IdentityResolutionError(`No free Markdown path for ${id} under ${directory}/`);
 }
 
-function replaceMention(content: string, oldId: string, newId: string): string {
-  const mention = new RegExp(`(\\[\\[)${escapeRegExp(oldId)}(?=[\\]|])`, "g");
-  return content.replace(mention, `$1${newId}`);
+export function assignIdentities(
+  claims: readonly IdentityClaim[],
+  reserved: ReservedIdentities
+): IdentityAssignment {
+  const takenIds = new Set(reserved.ids);
+  const takenPaths = new Set(reserved.filePaths);
+  const identities = new Map<string, AssignedIdentity>();
+  const collisions: IdentityCollision[] = [];
+  for (const claim of [...claims].sort(compareClaims)) {
+    if (identities.has(claim.uuid)) {
+      throw new IdentityResolutionError(
+        `UUID ${claim.uuid} is claimed by more than one record; remove the duplicate line, then retry`
+      );
+    }
+    const id = allocateId(claim, takenIds);
+    takenIds.add(id);
+    const filePath =
+      claim.filePath === undefined
+        ? undefined
+        : allocateFilePath(claim, claim.filePath, id, takenPaths);
+    if (filePath !== undefined) takenPaths.add(filePath);
+    identities.set(claim.uuid, { id, filePath });
+    if (id !== claim.id || filePath !== claim.filePath) {
+      collisions.push({
+        entityType: claim.entityType,
+        uuid: claim.uuid,
+        oldId: claim.id,
+        newId: id,
+        oldFilePath: claim.filePath,
+        newFilePath: filePath,
+      });
+    }
+  }
+  return { identities, collisions };
+}
+
+export interface NamespaceRecord {
+  entityType: EntityType;
+  id: string;
+  uuid: string;
+}
+
+export interface ReferenceNamespace {
+  readonly scope: ReadonlySet<EntityType>;
+  readonly complete: boolean;
+  readonly uuidsById: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+function namespaceKey(entityType: EntityType, id: string): string {
+  return `${entityType}:${id}`;
+}
+
+export function createReferenceNamespace(
+  scope: Iterable<EntityType>,
+  complete: boolean,
+  records: Iterable<NamespaceRecord>
+): ReferenceNamespace {
+  const uuidsById = new Map<string, Set<string>>();
+  for (const record of records) {
+    const key = namespaceKey(record.entityType, record.id);
+    const owners = uuidsById.get(key) ?? new Set<string>();
+    owners.add(record.uuid);
+    uuidsById.set(key, owners);
+  }
+  return { scope: new Set(scope), complete, uuidsById };
+}
+
+interface ReferenceContext {
+  namespace: ReferenceNamespace;
+  identities: ReadonlyMap<string, AssignedIdentity>;
+  owner: NamespaceRecord;
+}
+
+function resolveReference(
+  context: ReferenceContext,
+  targetType: EntityType,
+  targetId: string,
+  field: string,
+  structural: boolean
+): string {
+  const { namespace, identities, owner } = context;
+  const ownerRow = getEntityRow(owner.entityType);
+  const ownerLabel = `${ownerRow.jsonlFile}: ${ownerRow.label} ${owner.id} (${owner.uuid}) ${field}`;
+  if (targetType === owner.entityType && targetId === owner.id) {
+    return identities.get(owner.uuid)?.id ?? targetId;
+  }
+  if (!namespace.scope.has(targetType)) return targetId;
+  const uuids = namespace.uuidsById.get(namespaceKey(targetType, targetId));
+  if (uuids === undefined) {
+    if (structural && namespace.complete) {
+      throw new IdentityResolutionError(
+        `${ownerLabel} names ${targetId}, which is not in the snapshot; restore ${targetId} or remove the reference, then retry`
+      );
+    }
+    return targetId;
+  }
+  if (uuids.size > 1) {
+    throw new IdentityResolutionError(
+      `${ownerLabel} names ${targetId}, which is ambiguous across UUIDs ${Array.from(uuids).sort().join(", ")}; edit the reference to name one entity, then retry`
+    );
+  }
+  const [uuid] = uuids;
+  return identities.get(uuid)?.id ?? targetId;
 }
 
 function remapRelationship(
+  context: ReferenceContext,
   relationship: RelationshipJSONL,
-  rename: IdentityRename,
-  entityUuid: string
+  index: number
 ): RelationshipJSONL {
-  let from = relationship.from;
-  let to = relationship.to;
-  if (
-    relationship.from_type === rename.entityType &&
-    from === rename.oldId &&
-    entityUuid === rename.uuid
-  ) {
-    from = rename.newId;
-  }
-  return from === relationship.from && to === relationship.to
-    ? relationship
-    : { ...relationship, from, to };
-}
-
-function remapFeedback(
-  feedback: FeedbackJSONL,
-  rename: IdentityRename,
-  entityUuid: string
-): FeedbackJSONL {
-  let from_id = feedback.from_id;
-  let to_id = feedback.to_id;
-  if (
-    rename.entityType === "issue" &&
-    from_id === rename.oldId &&
-    entityUuid === rename.uuid
-  ) {
-    from_id = rename.newId;
-  }
-  if (
-    to_id === rename.oldId &&
-    entityUuid === rename.uuid
-  ) {
-    to_id = rename.newId;
-  }
-  return from_id === feedback.from_id && to_id === feedback.to_id
-    ? feedback
-    : { ...feedback, from_id, to_id };
-}
-
-export function remapIdentityReferences<T extends IdentityRecord>(
-  entities: T[],
-  renames: IdentityRename[]
-): T[] {
-  if (renames.length === 0) return entities;
-  return entities.map((entity) => {
-    let next = entity;
-    for (const rename of renames) {
-      const content = next.content && next.uuid === rename.uuid
-        ? replaceMention(next.content, rename.oldId, rename.newId)
-        : next.content;
-      const parent_id = next.parent_id;
-      const relationships = next.relationships?.map((relationship) =>
-        remapRelationship(relationship, rename, next.uuid)
-      );
-      const feedback = next.feedback?.map((entry) =>
-        remapFeedback(entry, rename, next.uuid)
-      );
-      if (
-        content !== next.content ||
-        parent_id !== next.parent_id ||
-        relationships !== next.relationships ||
-        feedback !== next.feedback
-      ) {
-        next = { ...next, content, parent_id, relationships, feedback };
-      }
-    }
-    return next;
-  });
-}
-
-export function resolveIdentityCollisions<T extends IdentityRecord>(
-  entities: T[],
-  existing: IdentityRecord[] = []
-): IdentityResolution<T> {
-  if (entities.length === 0 && existing.length === 0) {
-    return { entities, renames: [], collisions: [] };
-  }
-  const first = entities[0] ?? existing[0];
-  const entityType = getEntityTypeFromId(first.id);
-  const takenIds = new Set(existing.map((entity) => entity.id));
-  const takenPaths = new Set(
-    existing
-      .map((entity) => entity.file_path)
-      .filter((filePath) => filePath !== undefined)
-  );
-  const allocatedPaths = new Set<string>();
-  const existingPathOwners = new Map(
-    existing.flatMap((entity) =>
-      entity.file_path === undefined ? [] : [[entity.file_path, entity.uuid]]
-    )
-  );
-  const existingById = new Map(existing.map((entity) => [entity.id, entity]));
-  const renames: IdentityRename[] = [];
-  const collisions: IdentityCollision[] = [];
-  const resolved = entities.map((entity) => {
-    if (getEntityTypeFromId(entity.id) !== entityType) {
-      throw new Error(`Mixed entity types in identity resolution for ${entity.id}`);
-    }
-    const local = existingById.get(entity.id);
-    const shouldRenameId = local
-      ? local.uuid !== entity.uuid
-      : takenIds.has(entity.id);
-    const next = { ...entity };
-    if (shouldRenameId) {
-      const rename: IdentityRename = {
-        entityType,
-        oldId: entity.id,
-        newId: generateCollisionEntityId(entityType, entity.uuid, takenIds),
-        uuid: entity.uuid,
-        oldFilePath: entity.file_path,
-      };
-      next.id = rename.newId;
-      takenIds.add(rename.newId);
-      renames.push(rename);
-      collisions.push({
-        entityType,
-        uuid: entity.uuid,
-        oldId: rename.oldId,
-        newId: rename.newId,
-        localTitle: local?.title,
-        incomingTitle: entity.title,
-        localCreatedAt: local && "created_at" in local && typeof local.created_at === "string" ? local.created_at : undefined,
-        incomingCreatedAt: "created_at" in entity && typeof entity.created_at === "string" ? entity.created_at : "",
-        reason: local ? "Same ID but different UUID" : "Duplicate ID",
-      });
-    } else {
-      takenIds.add(entity.id);
-    }
-    if (entityType !== "issue") {
-      const rename = renameForUuid(renames, next.uuid);
-      const existingPathOwner = next.file_path
-        ? existingPathOwners.get(next.file_path)
-        : undefined;
-      const pathTakenByAnotherExisting = existingPathOwner !== undefined && existingPathOwner !== next.uuid;
-      const pathTakenByIncoming = next.file_path !== undefined && allocatedPaths.has(next.file_path);
-      if (
-        rename !== undefined ||
-        next.file_path === undefined ||
-        pathTakenByAnotherExisting ||
-        pathTakenByIncoming
-      ) {
-        const newFilePath = uniqueMirrorPath(entityType, next.id, takenPaths, next.file_path);
-        if (newFilePath === undefined) {
-          throw new Error(`Failed to allocate a Markdown path for ${next.id}`);
-        }
-        if (rename) rename.newFilePath = newFilePath;
-        next.file_path = newFilePath;
-        takenPaths.add(newFilePath);
-        allocatedPaths.add(newFilePath);
-      } else if (next.file_path !== undefined) {
-        takenPaths.add(next.file_path);
-        allocatedPaths.add(next.file_path);
-      }
-    }
-    return next;
-  });
   return {
-    entities: remapIdentityReferences(resolved, renames),
-    renames,
-    collisions,
+    ...relationship,
+    from: resolveReference(
+      context,
+      relationship.from_type,
+      relationship.from,
+      `relationships[${index}].from`,
+      true
+    ),
+    to: resolveReference(
+      context,
+      relationship.to_type,
+      relationship.to,
+      `relationships[${index}].to`,
+      true
+    ),
   };
 }
 
-function renameForUuid(
-  renames: IdentityRename[],
-  uuid: string
-): IdentityRename | undefined {
-  return renames.find((rename) => rename.uuid === uuid);
+function remapFeedback(
+  context: ReferenceContext,
+  feedback: FeedbackJSONL
+): FeedbackJSONL {
+  const field = `feedback.${feedback.id}`;
+  return {
+    ...feedback,
+    from_id:
+      feedback.from_id === undefined
+        ? undefined
+        : resolveReference(
+            context,
+            getEntityTypeFromId(feedback.from_id),
+            feedback.from_id,
+            `${field}.from_id`,
+            true
+          ),
+    to_id: resolveReference(
+      context,
+      getEntityTypeFromId(feedback.to_id),
+      feedback.to_id,
+      `${field}.to_id`,
+      true
+    ),
+  };
+}
+
+const MENTION_PATTERN = new RegExp(`(\\[\\[@?)(${ENTITY_ID_PATTERN_SOURCE})(?=[\\]|])`, "g");
+
+function remapMentions(context: ReferenceContext, content: string): string {
+  return content.replace(MENTION_PATTERN, (_match, opening: string, id: string) =>
+    `${opening}${resolveReference(context, getEntityTypeFromId(id), id, "content", false)}`
+  );
+}
+
+export interface ReferenceFields {
+  id: string;
+  uuid: string;
+  content: string;
+  file_path?: string;
+  parent_id?: string;
+  relationships: RelationshipJSONL[];
+  feedback?: FeedbackJSONL[];
+}
+
+export function remapEntityReferences<T extends ReferenceFields>(
+  entityType: EntityType,
+  entity: T,
+  namespace: ReferenceNamespace,
+  identities: ReadonlyMap<string, AssignedIdentity>
+): T {
+  const context: ReferenceContext = {
+    namespace,
+    identities,
+    owner: { entityType, id: entity.id, uuid: entity.uuid },
+  };
+  const assigned = identities.get(entity.uuid);
+  if (assigned === undefined) {
+    throw new IdentityResolutionError(
+      `${getEntityRow(entityType).label} ${entity.id} (${entity.uuid}) has no assigned identity`
+    );
+  }
+  return {
+    ...entity,
+    id: assigned.id,
+    ...(assigned.filePath === undefined ? {} : { file_path: assigned.filePath }),
+    ...(entity.parent_id === undefined
+      ? {}
+      : {
+          parent_id: resolveReference(context, entityType, entity.parent_id, "parent_id", true),
+        }),
+    content: remapMentions(context, entity.content),
+    relationships: entity.relationships.map((relationship, index) =>
+      remapRelationship(context, relationship, index)
+    ),
+    ...(entity.feedback === undefined
+      ? {}
+      : { feedback: entity.feedback.map((feedback) => remapFeedback(context, feedback)) }),
+  };
 }

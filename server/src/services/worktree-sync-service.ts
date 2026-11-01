@@ -1164,10 +1164,10 @@ export class WorktreeSyncService {
       skipErrors: true,
     });
 
-    // Two-way merge: Combine and resolve using UUID-based deduplication
-    // This is correct for two-way scenarios (no base version)
-    const allEntities = [...localEntities, ...worktreeEntities];
-    const { entities: merged } = resolveEntities(allEntities);
+    const { entities: merged } = resolveEntities([
+      localEntities,
+      worktreeEntities,
+    ]);
 
     // Write merged result back to local file
     await writeJSONL(localFilePath, merged);
@@ -1413,41 +1413,26 @@ export class WorktreeSyncService {
 
     // Fallback: Use two-way resolution from conflict markers
     // This is used when git stages are not available (manual conflict resolution)
-    const allEntities: JSONLEntity[] = [];
+    const oursEntities: JSONLEntity[] = [];
+    const theirsEntities: JSONLEntity[] = [];
+    const parseLines = (lines: string[]): JSONLEntity[] =>
+      this._parseJSONLContent(lines.join("\n"));
 
     for (const section of sections) {
       if (section.type === "clean") {
-        for (const line of section.lines) {
-          if (line.trim()) {
-            try {
-              allEntities.push(JSON.parse(line));
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        }
+        const clean = parseLines(section.lines);
+        oursEntities.push(...clean);
+        theirsEntities.push(...clean);
       } else {
-        // Conflict section - include both ours and theirs
-        for (const line of [
-          ...(section.ours || []),
-          ...(section.theirs || []),
-        ]) {
-          if (line.trim()) {
-            try {
-              allEntities.push(JSON.parse(line));
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        }
+        oursEntities.push(...parseLines(section.ours || []));
+        theirsEntities.push(...parseLines(section.theirs || []));
       }
     }
 
-    // Two-way resolution: Use resolveEntities for UUID-based deduplication
-    // This is appropriate when we don't have a true base version
-    const { entities: resolved } = resolveEntities(allEntities, {
-      verbose: false,
-    });
+    const { entities: resolved } = resolveEntities([
+      oursEntities,
+      theirsEntities,
+    ]);
 
     // Write back resolved entities
     await writeJSONL(filePath, resolved);

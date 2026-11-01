@@ -140,6 +140,17 @@ function getContext() {
   return { db, outputDir, jsonOutput };
 }
 
+type CommandStartup = "none" | "database" | "hydrated";
+
+const COMMAND_STARTUP: Partial<Record<string, CommandStartup>> = {
+  init: "none",
+  "merge-driver": "none",
+  "init-merge-driver": "none",
+  "remove-merge-driver": "none",
+  import: "database",
+  "resolve-conflicts": "database",
+};
+
 // Create main program
 const program = new Command();
 
@@ -149,19 +160,26 @@ program
   .version(VERSION)
   .option("--db <path>", "Database path (default: auto-discover)")
   .option("--json", "Output in JSON format")
-  .hook("preAction", async (thisCommand: Command) => {
-    const opts = thisCommand.optsWithGlobals();
+  .hook("preAction", async (_program: Command, actionCommand: Command) => {
+    const opts = actionCommand.optsWithGlobals();
     if (opts.db) dbPath = opts.db;
     if (opts.json) jsonOutput = true;
 
-    if (thisCommand.name() !== "init") {
-      initDB();
-      const skipHydration = new Set(["import", "resolve-conflicts", "merge-driver"]);
-      const hasTrackedEntities = ENTITY_ROWS.some((row) =>
-        fs.existsSync(path.join(outputDir, row.jsonlFile))
-      );
-      if (db && hasTrackedEntities && !skipHydration.has(thisCommand.name())) {
+    const topLevel = actionCommand.parent === program ? actionCommand.name() : null;
+    const startup = (topLevel && COMMAND_STARTUP[topLevel]) || "hydrated";
+    if (startup === "none") return;
+    initDB();
+    const hasTrackedEntities = ENTITY_ROWS.some((row) =>
+      fs.existsSync(path.join(outputDir, row.jsonlFile))
+    );
+    if (startup === "hydrated" && db && hasTrackedEntities) {
+      try {
         await importFromJSONL(db, { inputDir: outputDir });
+      } catch (error) {
+        console.error(
+          chalk.red(error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+        );
+        process.exit(1);
       }
     }
   })
@@ -564,7 +582,6 @@ program
   .option("--dry-run", "Show what would be done without making changes")
   .option("--verbose", "Show detailed resolution information")
   .action(async (options) => {
-    initDB();
     await handleResolveConflicts(getContext(), options);
   });
 

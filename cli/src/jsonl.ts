@@ -6,14 +6,9 @@
 import * as fs from "fs";
 import * as readline from "readline";
 import * as path from "path";
-import type { SpecJSONL, AdrJSONL, IssueJSONL } from "./types.js";
-import type { IdentityRecord } from "./identity-collisions.js";
+import type { EntitySnapshot } from "@sudocode-ai/types/entities";
 
-export type JSONLEntity =
-  | SpecJSONL
-  | AdrJSONL
-  | IssueJSONL
-  | (Record<string, any> & IdentityRecord);
+export type JSONLEntity = EntitySnapshot;
 
 export interface ReadJSONLOptions {
   /**

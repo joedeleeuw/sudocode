@@ -1,7 +1,6 @@
 import type {
   Adr,
   AdrJSONL,
-  EntityType,
   Issue,
   IssueJSONL,
   Spec,
@@ -9,59 +8,7 @@ import type {
 } from "./index.js";
 import { InputError } from "./errors.js";
 
-export interface EntityCases {
-  spec: {
-    entity: Spec;
-    snapshot: SpecJSONL;
-    prefix: "s";
-    table: "specs";
-    jsonlFile: "specs.jsonl";
-    markdownDir: "specs";
-    command: "spec";
-    toolStem: "spec";
-    route: "specs";
-    label: "Spec";
-    pluralLabel: "Specs";
-  };
-  issue: {
-    entity: Issue;
-    snapshot: IssueJSONL;
-    prefix: "i";
-    table: "issues";
-    jsonlFile: "issues.jsonl";
-    markdownDir: "issues";
-    command: "issue";
-    toolStem: "issue";
-    route: "issues";
-    label: "Issue";
-    pluralLabel: "Issues";
-  };
-  adr: {
-    entity: Adr;
-    snapshot: AdrJSONL;
-    prefix: "a";
-    table: "adrs";
-    jsonlFile: "adrs.jsonl";
-    markdownDir: "adrs";
-    command: "adr";
-    toolStem: "adr";
-    route: "adrs";
-    label: "ADR";
-    pluralLabel: "ADRs";
-  };
-}
-
-export type Entity<K extends EntityType = EntityType> = EntityCases[K]["entity"];
-export type EntitySnapshot<K extends EntityType = EntityType> = EntityCases[K]["snapshot"];
-export type EntitySnapshots = { [K in EntityType]: EntitySnapshot<K>[] };
-export type EntitySelection<K extends EntityType = EntityType> = {
-  [T in EntityType]: { entityType: T; entity: Entity<T> };
-}[K];
-export type EntityRow<K extends EntityType = EntityType> = {
-  [T in EntityType]: { type: T } & Omit<EntityCases[T], "entity" | "snapshot">;
-}[K];
-
-export const ENTITY_TABLE: { [K in EntityType]: EntityRow<K> } = {
+export const ENTITY_TABLE = {
   spec: {
     type: "spec",
     prefix: "s",
@@ -98,14 +45,31 @@ export const ENTITY_TABLE: { [K in EntityType]: EntityRow<K> } = {
     label: "ADR",
     pluralLabel: "ADRs",
   },
-};
+} as const;
 
-export const ENTITY_ROWS = Object.values(ENTITY_TABLE);
-export const ENTITY_TYPE_VALUES = ENTITY_ROWS.map((row) => row.type);
+export type EntityType = keyof typeof ENTITY_TABLE;
+export type DocumentEntityType = Exclude<EntityType, "issue">;
+
+interface EntityModels {
+  spec: { entity: Spec; snapshot: SpecJSONL };
+  issue: { entity: Issue; snapshot: IssueJSONL };
+  adr: { entity: Adr; snapshot: AdrJSONL };
+}
+
+export type Entity<K extends EntityType = EntityType> = EntityModels[K]["entity"];
+export type EntitySnapshot<K extends EntityType = EntityType> = EntityModels[K]["snapshot"];
+export type EntitySnapshots = { [K in EntityType]: EntitySnapshot<K>[] };
+export type EntitySelection<K extends EntityType = EntityType> = {
+  [T in K]: { entityType: T; entity: Entity<T> };
+}[K];
+export type EntityRow<K extends EntityType = EntityType> = (typeof ENTITY_TABLE)[K];
+
+export const ENTITY_ROWS: readonly EntityRow[] = Object.values(ENTITY_TABLE);
+export const ENTITY_TYPE_VALUES: readonly EntityType[] = ENTITY_ROWS.map((row) => row.type);
 export const ENTITY_ID_PATTERN_SOURCE = `(?:(?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8})|(?:(?:${ENTITY_ROWS.map((row) => row.label.toUpperCase()).join("|")})-\\d+)`;
 
 export function isEntityType(value: unknown): value is EntityType {
-  return typeof value === "string" && Object.hasOwn(ENTITY_TABLE, value);
+  return ENTITY_ROWS.some((row) => row.type === value);
 }
 
 export function parseEntityType(value: unknown, field = "entity_type"): EntityType {

@@ -128,7 +128,7 @@ export interface Relationship {
   metadata?: string;
 }
 
-export type EntityType = "spec" | "issue" | "adr";
+export type EntityType = import("./entities.js").EntityType;
 
 export type RelationshipType =
   | "blocks"

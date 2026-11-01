@@ -32,7 +32,12 @@ import { relocateFeedbackAnchor } from "./operations/feedback-anchors.js";
 import { exportToJSONL } from "./export.js";
 import { generateEntityId } from "./id-generator.js";
 import type { Adr, EntityType, Spec, Issue, IssueStatus } from "@sudocode-ai/types";
-import { ENTITY_ROWS, parseEntityType } from "@sudocode-ai/types/entities";
+import {
+  ENTITY_ROWS,
+  parseEntityType,
+  type DocumentEntityType,
+  type Entity,
+} from "@sudocode-ai/types/entities";
 import { isValidIssueStatus, isValidRelationshipType } from "./validation.js";
 
 export interface MarkdownSyncResult {
@@ -69,16 +74,11 @@ export interface SyncOptions {
   writeBackFrontmatter?: boolean;
 }
 
-type DocumentEntityMap = { spec: Spec; adr: Adr };
-type DocumentEntityType = keyof DocumentEntityMap;
-
-type DocumentEntity = DocumentEntityMap[DocumentEntityType];
-
-interface DocumentSyncCase {
-  get(db: Database.Database, id: string): DocumentEntity | null;
-  getByFilePath(db: Database.Database, filePath: string): DocumentEntity | null;
+interface DocumentSyncCase<K extends DocumentEntityType> {
+  get(db: Database.Database, id: string): Entity<K> | null;
+  getByFilePath(db: Database.Database, filePath: string): Entity<K> | null;
   contentChanged(
-    entity: DocumentEntity | null,
+    entity: Entity<K> | null,
     frontmatter: Record<string, any>,
     content: string,
     filePath: string
@@ -93,15 +93,16 @@ interface DocumentSyncCase {
   ): void;
 }
 
+type DocumentSyncTable = {
+  [K in DocumentEntityType]: DocumentSyncCase<K>;
+};
+
 const DOCUMENT_SYNC_CASES = {
   spec: {
     get: getSpec,
     getByFilePath: getSpecByFilePath,
     contentChanged(entity, frontmatter, content, filePath) {
       if (entity === null) return true;
-      if (!("priority" in entity)) {
-        throw new Error(`Spec ${entity.id} arrived through the wrong sync case`);
-      }
       return (
         entity.title !== frontmatter.title ||
         entity.content !== content ||
@@ -150,9 +151,9 @@ const DOCUMENT_SYNC_CASES = {
       }
     },
   },
-} satisfies Record<DocumentEntityType, DocumentSyncCase>;
+} satisfies DocumentSyncTable;
 
-function documentSyncCase(entityType: DocumentEntityType): DocumentSyncCase {
+function documentSyncCase<K extends DocumentEntityType>(entityType: K): DocumentSyncCase<K> {
   return DOCUMENT_SYNC_CASES[entityType];
 }
 
@@ -467,10 +468,10 @@ function determineEntityType(
   return row.type;
 }
 
-async function syncDocument(
+async function syncDocument<K extends DocumentEntityType>(
   db: Database.Database,
   id: string,
-  entityType: "spec" | "adr",
+  entityType: K,
   frontmatter: Record<string, any>,
   content: string,
   references: CrossReference[],

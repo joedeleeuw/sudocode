@@ -302,7 +302,7 @@ function readSlices(root: Root, sections: SpecBreadboardSection[]): SpecBreadboa
       ids.add(id)
       const title = requiredCell('target', row, 'title', id)
       const issue = requiredCell('target', row, 'issue', id)
-      const issueId = /^\[\[(i-[a-z0-9]+)\]\]$/u.exec(issue)?.[1]
+      const issueId = /^\[\[(i-[a-z0-9]+(?:\.\d+)?)\]\]$/u.exec(issue)?.[1]
       if (!issueId && issue !== '—')
         throw new Error(
           `Slice ${id} Issue token ${issue}: use [[i-xxxx]] or — for an unlinked slice.`

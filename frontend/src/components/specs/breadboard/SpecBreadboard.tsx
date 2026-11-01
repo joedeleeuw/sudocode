@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
+  getViewportForBounds,
   MarkerType,
   useInternalNode,
   useReactFlow,
   useStore,
   type Edge,
+  type FitViewOptions,
   type Node,
 } from '@xyflow/react'
 import { shallow } from 'zustand/shallow'
@@ -221,6 +223,7 @@ function BreadboardSectionView({
   const [graphSize, setGraphSize] = useState({ width: 0, height: 0 })
   const [canvasWidth, setCanvasWidth] = useState(0)
   const canvasRef = useRef<HTMLDivElement>(null)
+  const fitRef = useRef<() => void>(() => {})
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -335,12 +338,18 @@ function BreadboardSectionView({
             minimumFitZoom={0.1}
             fitPadding="24px"
             fitView={false}
+            onFitView={() => fitRef.current()}
             defaultZoom={1}
             alignColumns
             onNodeSelect={setFocusedPlaceId}
             showControls
           >
-            <BreadboardViewport onGraphSize={setGraphSize} />
+            <BreadboardViewport
+              onGraphSize={setGraphSize}
+              fitRef={fitRef}
+              minimumFitZoom={0.1}
+              fitPadding="24px"
+            />
             <BreadboardFocus placeId={focusedPlaceId} />
           </FlowCanvas>
         )}
@@ -351,12 +360,21 @@ function BreadboardSectionView({
 
 function BreadboardViewport({
   onGraphSize,
+  fitRef,
+  minimumFitZoom,
+  fitPadding,
 }: {
   onGraphSize: (size: { width: number; height: number }) => void
+  fitRef: { current: () => void }
+  minimumFitZoom: number
+  fitPadding: NonNullable<FitViewOptions['padding']>
 }) {
   const nodes = useStore((state) => [...state.nodeLookup.values()], shallow)
+  const edges = useStore((state) => state.edges, shallow)
+  const domNode = useStore((state) => state.domNode)
   const { setViewport } = useReactFlow()
   const initialized = useRef(false)
+  const routeBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   useEffect(() => {
     if (!nodes.length || nodes.some((node) => !node.measured.width || !node.measured.height)) return
     const bounds = nodes.map((node) => {
@@ -375,11 +393,65 @@ function BreadboardViewport({
     const right = Math.max(...bounds.map((node) => node.x + node.width))
     const bottom = Math.max(...bounds.map((node) => node.y + node.height))
     onGraphSize({ width: right - left, height: bottom - top })
+    routeBoundsRef.current = {
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+    }
     if (!initialized.current) {
       initialized.current = true
       void setViewport({ x: 32 - left, y: 32 - top, zoom: 1 })
     }
-  }, [nodes, onGraphSize, setViewport])
+    let cancelled = false
+    let frames = 0
+    const measureRoutes = () => {
+      if (cancelled) return
+      const paths = domNode ? [...domNode.querySelectorAll('path.react-flow__edge-path')] : []
+      if (paths.length < edges.length) {
+        frames += 1
+        if (frames < 90) {
+          requestAnimationFrame(measureRoutes)
+        } else if (edges.length > 0) {
+          throw new Error('Breadboard wires did not render for bounds measurement.')
+        }
+        return
+      }
+      const rects = paths.map((element) => (element as SVGGraphicsElement).getBBox())
+      const routeLeft = Math.min(left, ...rects.map((rect) => rect.x))
+      const routeTop = Math.min(top, ...rects.map((rect) => rect.y))
+      const routeRight = Math.max(right, ...rects.map((rect) => rect.x + rect.width))
+      const routeBottom = Math.max(bottom, ...rects.map((rect) => rect.y + rect.height))
+      routeBoundsRef.current = {
+        x: routeLeft,
+        y: routeTop,
+        width: routeRight - routeLeft,
+        height: routeBottom - routeTop,
+      }
+    }
+    measureRoutes()
+    return () => {
+      cancelled = true
+    }
+  }, [nodes, edges, domNode, onGraphSize, setViewport])
+  useEffect(() => {
+    fitRef.current = () => {
+      const bounds = routeBoundsRef.current
+      if (!bounds || !domNode) return
+      const fitted = getViewportForBounds(
+        bounds,
+        domNode.clientWidth,
+        domNode.clientHeight,
+        minimumFitZoom,
+        1.5,
+        fitPadding
+      )
+      void setViewport(fitted)
+    }
+    return () => {
+      fitRef.current = () => {}
+    }
+  }, [fitRef, domNode, setViewport, minimumFitZoom, fitPadding])
   return null
 }
 

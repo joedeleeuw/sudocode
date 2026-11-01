@@ -66,7 +66,7 @@ export type EntityRow<K extends EntityType = EntityType> = (typeof ENTITY_TABLE)
 
 export const ENTITY_ROWS: readonly EntityRow[] = Object.values(ENTITY_TABLE);
 export const ENTITY_TYPE_VALUES: readonly EntityType[] = ENTITY_ROWS.map((row) => row.type);
-export const ENTITY_ID_PATTERN_SOURCE = `(?:(?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8})|(?:(?:${ENTITY_ROWS.map((row) => row.label.toUpperCase()).join("|")})-\\d+)`;
+export const ENTITY_ID_PATTERN_SOURCE = `(?:(?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8}(?:\\.\\d+)?)|(?:(?:${ENTITY_ROWS.map((row) => row.label.toUpperCase()).join("|")})-\\d+(?:\\.\\d+)?)`;
 
 export function isEntityType(value: unknown): value is EntityType {
   return ENTITY_ROWS.some((row) => row.type === value);
@@ -107,12 +107,12 @@ export function isHashID(id: string): boolean {
   const prefix = id.split("-", 1)[0];
   return (
     ENTITY_ROWS.some((row) => row.prefix === prefix) &&
-    /^[a-z]-[0-9a-z]{4,8}$/.test(id)
+    /^[a-z]-[0-9a-z]{4,8}(\.\d+)?$/.test(id)
   );
 }
 
 export function isLegacyID(id: string): boolean {
   return ENTITY_ROWS.some((row) =>
-    new RegExp(`^${row.label.toUpperCase()}-\\d+$`).test(id)
+    new RegExp(`^${row.label.toUpperCase()}-\\d+(\\.\\d+)?$`).test(id)
   );
 }

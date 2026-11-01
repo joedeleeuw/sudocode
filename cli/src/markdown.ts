@@ -157,7 +157,7 @@ export function extractCrossReferences(
   // - [[i-x7k9]]{ blocks }
   // - [[i-x7k9]]{ type: depends-on }
   const refPattern = new RegExp(
-    `\\[\\[(@)?((?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8})(?:\\|([^\\]]+))?\\]\\](?:\\{\\s*(?:type:\\s*)?([a-z-]+)\\s*\\})?`,
+    `\\[\\[(@)?((?:${ENTITY_ROWS.map((row) => row.prefix).join("|")})-[0-9a-z]{4,8}(?:\\.\\d+)?)(?:\\|([^\\]]+))?\\]\\](?:\\{\\s*(?:type:\\s*)?([a-z-]+)\\s*\\})?`,
     "gi"
   );
 

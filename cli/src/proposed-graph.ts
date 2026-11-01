@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { RelationshipJSONL } from "./types.js";
 import {
   ENTITY_ROWS,
+  getEntityRow,
   getEntityTypeFromId,
   type EntitySnapshot,
   type EntitySnapshots,
@@ -15,6 +16,7 @@ import {
   validateSupersessionEdges,
 } from "./operations/relationships.js";
 import { normalizeMirrorPath } from "./snapshot.js";
+import type { ResolvedParent } from "./operations/parents.js";
 
 export interface ProposedRelationship {
   relationship: RelationshipJSONL;
@@ -97,7 +99,7 @@ function proposedRelationships(scope: ProposedScope): ProposedRelationship[] {
       if (entity.parent_uuid !== undefined) {
         failUnless(
           entity.parent_uuid === parentUuid,
-          `Parent UUID ${entity.parent_uuid} for ${entity.id} does not match ${entity.parent_id} (${parentUuid})`
+          `${getEntityRow(entityType).jsonlFile}: ${entity.id} parent_uuid ${entity.parent_uuid} does not match parent_id ${entity.parent_id} (${parentUuid})`
         );
       }
     }
@@ -139,41 +141,64 @@ function edgeKey(type: string, fromUuid: string, toUuid: string): string {
   return `${type}:${fromUuid}:${toUuid}`;
 }
 
+/** Each spec's and issue's resolved parent, keyed by the entity's UUID */
+export type ParentMap = ReadonlyMap<string, ResolvedParent>;
+
 export interface ProposedState {
   readonly snapshot: EntitySnapshots;
   readonly relationships: readonly ProposedRelationship[];
+  readonly parents: ParentMap;
 }
 
 /**
  * Validate a complete proposed snapshot. Import applies it exactly as written:
  * statuses are stored, never derived, so the result depends only on the
- * snapshot.
+ * snapshot. Each parent is resolved here into one value, a root or a parent
+ * named by both id and uuid, and the snapshot carries exactly that value.
  */
 export function validateProposedSnapshot(snapshot: EntitySnapshots): ProposedState {
   const relationships = proposedRelationships(snapshot);
+  const parents = new Map<string, ResolvedParent>();
   return {
     snapshot: {
-      spec: withParentUuids(snapshot.spec),
-      issue: withParentUuids(snapshot.issue),
+      spec: withResolvedParents(snapshot.spec, parents),
+      issue: withResolvedParents(snapshot.issue, parents),
       adr: snapshot.adr,
     },
     relationships,
+    parents,
   };
 }
 
-/**
- * parent_uuid is derived from parent_id at this boundary, whatever the file
- * holds. proposedRelationships has already rejected a parent_uuid that names
- * another entity, so this only fills one an older release wrote as null.
- */
-function withParentUuids<T extends { uuid: string; id: string; parent_id?: string; parent_uuid?: string }>(
-  entities: readonly T[]
+function withResolvedParents<T extends { uuid: string; id: string; parent_id?: string; parent_uuid?: string }>(
+  entities: readonly T[],
+  parents: Map<string, ResolvedParent>
 ): T[] {
   const uuids = new Map(entities.map((entity) => [entity.id, entity.uuid]));
-  return entities.map((entity) => ({
-    ...entity,
-    parent_uuid: entity.parent_id === undefined ? undefined : uuids.get(entity.parent_id),
-  }));
+  return entities.map((entity) => {
+    let parent: ResolvedParent = null;
+    if (entity.parent_id !== undefined) {
+      const parentUuid = uuids.get(entity.parent_id);
+      if (parentUuid === undefined) {
+        throw new ProposedGraphError(`${entity.id} names a missing parent ${entity.parent_id}`);
+      }
+      parent = { id: entity.parent_id, uuid: parentUuid };
+    }
+    parents.set(entity.uuid, parent);
+    return { ...entity, parent_id: parent?.id, parent_uuid: parent?.uuid };
+  });
+}
+
+/**
+ * The resolved parent of one snapshot entity. Every spec and issue of the
+ * validated snapshot has one; a missing entry is a broken invariant.
+ */
+export function parentOf(parents: ParentMap, entity: { id: string; uuid: string }): ResolvedParent {
+  const parent = parents.get(entity.uuid);
+  if (parent === undefined) {
+    throw new ProposedGraphError(`${entity.id} has no resolved parent in the validated snapshot`);
+  }
+  return parent;
 }
 
 /**

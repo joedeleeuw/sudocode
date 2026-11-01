@@ -5,6 +5,7 @@
 import type Database from "better-sqlite3";
 import type { Spec } from "../types.js";
 import { generateUUID } from "../id-generator.js";
+import { parentColumns, parentUpdate, type ResolvedParent } from "./parents.js";
 
 /**
  * Parse external_links JSON field from SQLite row
@@ -28,7 +29,7 @@ export interface CreateSpecInput {
   file_path: string;
   content?: string;
   priority?: number;
-  parent_id?: string;
+  parent?: ResolvedParent;
   archived?: boolean;
   archived_at?: string;
   created_at?: string;
@@ -41,7 +42,7 @@ export interface UpdateSpecInput {
   file_path?: string;
   content?: string;
   priority?: number;
-  parent_id?: string;
+  parent?: ResolvedParent;
   archived?: boolean;
   archived_at?: string;
   updated_at?: string;
@@ -63,16 +64,6 @@ export function createSpec(
   db: Database.Database,
   input: CreateSpecInput
 ): Spec {
-  // Validate parent_id exists if provided and get parent_uuid
-  let parent_uuid: string | null = null;
-  if (input.parent_id) {
-    const parent = getSpec(db, input.parent_id);
-    if (!parent) {
-      throw new Error(`Parent spec not found: ${input.parent_id}`);
-    }
-    parent_uuid = parent.uuid;
-  }
-
   const uuid = input.uuid || generateUUID();
 
   // Build INSERT statement with optional timestamp fields
@@ -143,8 +134,7 @@ export function createSpec(
       file_path: input.file_path,
       content: input.content || "",
       priority: input.priority ?? 2,
-      parent_id: input.parent_id ?? null,
-      parent_uuid: parent_uuid,
+      ...parentColumns(input.parent ?? null),
       archived: input.archived ? 1 : 0,
       external_links: input.external_links ?? null,
     };
@@ -215,16 +205,6 @@ export function updateSpec(
     throw new Error(`Spec not found: ${id}`);
   }
 
-  // Validate parent_id exists if provided and resolve its uuid
-  let parent_uuid: string | null = null;
-  if (input.parent_id) {
-    const parent = getSpec(db, input.parent_id);
-    if (!parent) {
-      throw new Error(`Parent spec not found: ${input.parent_id}`);
-    }
-    parent_uuid = parent.uuid;
-  }
-
   const updates: string[] = [];
   const params: Record<string, any> = { id };
 
@@ -244,18 +224,11 @@ export function updateSpec(
     updates.push("priority = @priority");
     params.priority = input.priority;
   }
-  if (input.parent_id !== undefined) {
-    if (input.parent_id !== existing.parent_id) {
-      updates.push("parent_id = @parent_id");
-      params.parent_id = input.parent_id;
-    }
-    // parent_uuid has one source, parent_id: whenever a parent_id is
-    // supplied, store its parent's uuid (null when the parent is removed).
-    const nextParentUuid = input.parent_id ? parent_uuid : null;
-    if (nextParentUuid !== (existing.parent_uuid ?? null)) {
-      updates.push("parent_uuid = @parent_uuid");
-      params.parent_uuid = nextParentUuid;
-    }
+  const parentChange =
+    input.parent === undefined ? null : parentUpdate(existing, input.parent);
+  if (parentChange) {
+    updates.push(...parentChange.clauses);
+    Object.assign(params, parentChange.params);
   }
   if (input.archived !== undefined && input.archived !== existing.archived) {
     updates.push("archived = @archived");

@@ -53,7 +53,9 @@ import {
 } from "./operations/feedback.js";
 import {
   applyProposedGraph,
+  parentOf,
   validateProposedSnapshot,
+  type ParentMap,
 } from "./proposed-graph.js";
 import { transaction } from "./operations/transactions.js";
 import * as path from "path";
@@ -193,6 +195,12 @@ function normalizeComparableField(
 }
 
 /**
+ * The snapshot states a parent explicitly (absent means root), so a cached
+ * parent the snapshot does not name is a change, never a field to skip.
+ */
+const PARENT_FIELDS: ReadonlySet<keyof ChangeComparable> = new Set(["parent_id", "parent_uuid"]);
+
+/**
  * Check if an entity has changed
  */
 function hasChanged(existing: ChangeComparable, incoming: ChangeComparable): boolean {
@@ -214,7 +222,7 @@ function hasChanged(existing: ChangeComparable, incoming: ChangeComparable): boo
   ] as const;
   return fields.some((field) => {
     const incomingValue = incoming[field];
-    if (incomingValue === undefined) return false;
+    if (incomingValue === undefined && !PARENT_FIELDS.has(field)) return false;
     return (
       JSON.stringify(normalizeComparableField(field, existing[field])) !==
       JSON.stringify(normalizeComparableField(field, incomingValue))
@@ -229,6 +237,7 @@ export function importSpecs(
   db: Database.Database,
   specs: SpecJSONL[],
   changes: ChangeDetection,
+  parents: ParentMap,
   dryRun: boolean = false
 ): { added: number; updated: number; deleted: number } {
   if (dryRun) {
@@ -288,7 +297,7 @@ export function importSpecs(
   // Preserve updated_at to avoid clobbering timestamps set in pass 1
   for (const spec of specsWithParents) {
     updateSpec(db, spec.id, {
-      parent_id: spec.parent_id,
+      parent: parentOf(parents, spec),
       updated_at: spec.updated_at,
     });
   }
@@ -302,7 +311,7 @@ export function importSpecs(
         file_path: spec.file_path,
         content: spec.content,
         priority: spec.priority,
-        parent_id: spec.parent_id,
+        parent: parentOf(parents, spec),
         archived: spec.archived,
         archived_at: spec.archived_at,
         updated_at: spec.updated_at,
@@ -389,6 +398,7 @@ export function importIssues(
   db: Database.Database,
   issues: IssueJSONL[],
   changes: ChangeDetection,
+  parents: ParentMap,
   dryRun: boolean = false
 ): { added: number; updated: number; deleted: number } {
   if (dryRun) {
@@ -448,7 +458,7 @@ export function importIssues(
   // Preserve updated_at to avoid clobbering timestamps set in pass 1
   for (const issue of issuesWithParents) {
     updateIssueRow(db, issue.id, {
-      parent_id: issue.parent_id,
+      parent: parentOf(parents, issue),
       updated_at: issue.updated_at,
     });
   }
@@ -463,7 +473,7 @@ export function importIssues(
         status: issue.status,
         priority: issue.priority,
         assignee: issue.assignee,
-        parent_id: issue.parent_id,
+        parent: parentOf(parents, issue),
         archived: issue.archived,
         archived_at: issue.archived_at,
         updated_at: issue.updated_at,
@@ -493,6 +503,7 @@ interface EntityImportCase<K extends EntityType> {
     db: Database.Database,
     entities: EntitySnapshot<K>[],
     changes: ChangeDetection,
+    parents: ParentMap,
     dryRun: boolean
   ): ImportCounts;
   deletedMarkdownPath(db: Database.Database, inputDir: string, id: string): string | null;
@@ -519,7 +530,7 @@ const IMPORT_CASES = {
   },
   adr: {
     list: listAdrs,
-    import: importAdrs,
+    import: (db, entities, changes, _parents, dryRun) => importAdrs(db, entities, changes, dryRun),
     deletedMarkdownPath(db, inputDir, id) {
       const adr = getAdr(db, id);
       return adr ? path.join(inputDir, adr.file_path) : null;
@@ -717,14 +728,14 @@ export async function importFromJSONL(
   const warnings: ImportWarning[] = [];
 
   if (dryRun) {
-    counts.spec = IMPORT_CASES.spec.import(db, proposed.spec, changes.spec, true);
-    counts.issue = IMPORT_CASES.issue.import(db, proposed.issue, changes.issue, true);
-    counts.adr = IMPORT_CASES.adr.import(db, proposed.adr, changes.adr, true);
+    counts.spec = IMPORT_CASES.spec.import(db, proposed.spec, changes.spec, graph.parents, true);
+    counts.issue = IMPORT_CASES.issue.import(db, proposed.issue, changes.issue, graph.parents, true);
+    counts.adr = IMPORT_CASES.adr.import(db, proposed.adr, changes.adr, graph.parents, true);
   } else {
     transaction(db, () => {
-      counts.spec = IMPORT_CASES.spec.import(db, proposed.spec, changes.spec, false);
-      counts.issue = IMPORT_CASES.issue.import(db, proposed.issue, changes.issue, false);
-      counts.adr = IMPORT_CASES.adr.import(db, proposed.adr, changes.adr, false);
+      counts.spec = IMPORT_CASES.spec.import(db, proposed.spec, changes.spec, graph.parents, false);
+      counts.issue = IMPORT_CASES.issue.import(db, proposed.issue, changes.issue, graph.parents, false);
+      counts.adr = IMPORT_CASES.adr.import(db, proposed.adr, changes.adr, graph.parents, false);
       importSnapshotFeedback(db, proposed);
       applyProposedGraph(db, graph);
       for (const digest of digests) recordJSONLSync(db, digest);
@@ -757,4 +768,20 @@ export async function importFromJSONL(
     collisions,
     warnings,
   };
+}
+
+/**
+ * Import a project's tracked snapshot into its cache: the one import every
+ * open runs (each CLI command, each server project open) before anything
+ * reads or exports the cache. A project with no entity JSONL yet has nothing
+ * to import.
+ */
+export async function importTrackedSnapshot(
+  db: Database.Database,
+  sudocodeDir: string
+): Promise<ImportResult | null> {
+  const tracked = ENTITY_ROWS.some((row) =>
+    fs.existsSync(path.join(sudocodeDir, row.jsonlFile))
+  );
+  return tracked ? importFromJSONL(db, { inputDir: sudocodeDir }) : null;
 }

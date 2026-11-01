@@ -18,7 +18,8 @@ import {
   createSpec,
   updateSpec,
 } from "./operations/specs.js";
-import { getIssue, createIssue, updateIssueRow } from "./operations/issues.js";
+import { getIssue, createIssue, updateIssueRow, type UpdateIssueInput } from "./operations/issues.js";
+import { resolveParentId } from "./operations/parents.js";
 import {
   getAdr,
   getAdrByFilePath,
@@ -118,7 +119,9 @@ const DOCUMENT_SYNC_CASES = {
         file_path: frontmatter.file_path || "",
         content,
         priority: frontmatter.priority ?? 2,
-        parent_id: frontmatter.parent_id || undefined,
+        parent: frontmatter.parent_id
+          ? resolveParentId(db, "spec", frontmatter.parent_id)
+          : undefined,
       };
       if (isNew) {
         createSpec(db, { id, ...input, updated_at: updatedAt });
@@ -626,21 +629,19 @@ async function syncIssue(
     }
   }
 
-  const issueData: Partial<Issue> = {
-    id,
+  const issueData = {
     title: frontmatter.title || "Untitled",
     content,
     status,
     priority: frontmatter.priority ?? 2,
     assignee: frontmatter.assignee || undefined,
-    parent_id: frontmatter.parent_id || undefined,
-  };
+    parent: frontmatter.parent_id
+      ? resolveParentId(db, "issue", frontmatter.parent_id)
+      : undefined,
+  } satisfies UpdateIssueInput;
 
   if (isNew) {
-    createIssue(db, {
-      ...issueData,
-      updated_at: fileModTime,
-    } as any);
+    createIssue(db, { id, ...issueData, updated_at: fileModTime });
   } else {
     // Check if content has actually changed
     const contentChanged =
@@ -649,14 +650,14 @@ async function syncIssue(
       oldIssue?.status !== issueData.status ||
       oldIssue?.priority !== issueData.priority ||
       oldIssue?.assignee !== issueData.assignee ||
-      oldIssue?.parent_id !== issueData.parent_id;
+      (issueData.parent !== undefined && oldIssue?.parent_id !== issueData.parent?.id);
 
     // Only update timestamp if content actually changed
     // Note: external_links is handled separately via JSONL import, not markdown sync
     updateIssueRow(db, id, {
       ...issueData,
       ...(contentChanged && fileModTime ? { updated_at: fileModTime } : {}),
-    } as any);
+    });
   }
 
   // Sync tags

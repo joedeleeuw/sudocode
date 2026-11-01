@@ -14,12 +14,14 @@ import {
   searchIssues,
   updateIssue,
   closeIssue,
+  type UpdateIssueInput,
 } from "../operations/issues.js";
 import {
   getOutgoingRelationships,
   getIncomingRelationships,
 } from "../operations/relationships.js";
 import { getTags, setTags } from "../operations/tags.js";
+import { resolveParentId } from "../operations/parents.js";
 import { listFeedback } from "../operations/feedback.js";
 import { exportToJSONL } from "../export.js";
 import { syncJSONLToMarkdown, syncEntityMetadataToMarkdown, assertSynced } from "../sync.js";
@@ -62,7 +64,7 @@ export async function handleIssueCreate(
       status: "open",
       priority: parseInt(options.priority),
       assignee: options.assignee || undefined,
-      parent_id: options.parent || undefined,
+      parent: resolveParentId(ctx.db, "issue", options.parent),
     });
 
     if (options.tags) {
@@ -341,13 +343,13 @@ export async function handleIssueUpdate(
       process.exit(1);
     }
 
-    const updates: any = {};
-    if (options.status) updates.status = options.status;
+    const updates: UpdateIssueInput = {};
+    if (options.status && isValidIssueStatus(options.status)) updates.status = options.status;
     if (options.priority) updates.priority = parseInt(options.priority);
     if (options.assignee) updates.assignee = options.assignee;
     if (options.title) updates.title = options.title;
     if (options.description !== undefined) updates.content = options.description;
-    if (options.parent) updates.parent_id = options.parent;
+    if (options.parent) updates.parent = resolveParentId(ctx.db, "issue", options.parent);
     if (options.archived !== undefined) {
       updates.archived = options.archived === 'true';
     }
@@ -372,9 +374,10 @@ export async function handleIssueUpdate(
       console.log(JSON.stringify(issue, null, 2));
     } else {
       console.log(chalk.green("✓ Updated issue"), chalk.cyan(id));
-      Object.keys(updates).forEach((key) => {
-        console.log(chalk.gray(`  ${key}: ${updates[key]}`));
-      });
+      for (const [key, value] of Object.entries(updates)) {
+        const shown = key === "parent" ? value?.id ?? "none" : value;
+        console.log(chalk.gray(`  ${key}: ${shown}`));
+      }
     }
     await trackCommand(ctx.outputDir, "issue_update", { id, status: options.status, archived: options.archived === 'true' }, true, Date.now() - startTime);
   } catch (error) {

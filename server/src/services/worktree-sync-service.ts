@@ -28,11 +28,9 @@ import {
   parseMergeConflictFile,
   resolveEntities,
 } from "@sudocode-ai/cli/dist/merge-resolver.js";
-import {
-  writeJSONL,
-  readJSONLSync,
-  type JSONLEntity,
-} from "@sudocode-ai/cli/dist/jsonl.js";
+import { writeJSONL, type JSONLEntity } from "@sudocode-ai/cli/dist/jsonl.js";
+import { readEntitySnapshotFile } from "@sudocode-ai/cli/dist/snapshot.js";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 import * as os from "os";
 
 /**
@@ -1149,7 +1147,9 @@ export class WorktreeSyncService {
    * Used for merging uncommitted local + worktree JSONL files during stage sync.
    *
    * Uses `resolveEntities` for simple UUID-based deduplication, which is appropriate
-   * for two-way scenarios where we don't have a common base version.
+   * for two-way scenarios where we don't have a common base version. Both sides
+   * are decoded by the snapshot decoder, so a malformed line or leftover
+   * conflict marker fails the sync instead of silently dropping an entity.
    *
    * @param localFilePath - Absolute path to local JSONL file
    * @param worktreeFilePath - Absolute path to worktree JSONL file
@@ -1158,13 +1158,18 @@ export class WorktreeSyncService {
     localFilePath: string,
     worktreeFilePath: string
   ): Promise<void> {
-    // Read both versions
-    const localEntities = readJSONLSync(localFilePath, { skipErrors: true });
-    const worktreeEntities = readJSONLSync(worktreeFilePath, {
-      skipErrors: true,
-    });
+    const row = ENTITY_ROWS.find(
+      (candidate) => candidate.jsonlFile === path.basename(localFilePath)
+    );
+    if (!row) {
+      throw new Error(
+        `${localFilePath} is not a sudocode entity snapshot (${ENTITY_ROWS.map((candidate) => candidate.jsonlFile).join(", ")}); merge it by hand`
+      );
+    }
+    const localEntities = readEntitySnapshotFile(localFilePath, row.type);
+    const worktreeEntities = readEntitySnapshotFile(worktreeFilePath, row.type);
 
-    const { entities: merged } = resolveEntities([
+    const { entities: merged } = resolveEntities<JSONLEntity>([
       localEntities,
       worktreeEntities,
     ]);
@@ -1287,30 +1292,21 @@ export class WorktreeSyncService {
   /**
    * Resolve JSONL merge conflicts in the local repository
    *
-   * Checks for git conflict markers in issues.jsonl and specs.jsonl,
+   * Checks every entity JSONL file for git conflict markers
    * and resolves them using the merge-resolver logic.
    *
    * @returns Number of files resolved
    */
   private async _resolveJSONLConflicts(): Promise<number> {
     const sudocodePath = path.join(this.repoPath, ".sudocode");
-    const issuesPath = path.join(sudocodePath, "issues.jsonl");
-    const specsPath = path.join(sudocodePath, "specs.jsonl");
-
     let filesResolved = 0;
-
-    // Check and resolve issues.jsonl
-    if (fs.existsSync(issuesPath) && hasGitConflictMarkers(issuesPath)) {
-      await this._resolveJSONLFile(issuesPath);
-      filesResolved++;
+    for (const row of ENTITY_ROWS) {
+      const filePath = path.join(sudocodePath, row.jsonlFile);
+      if (fs.existsSync(filePath) && hasGitConflictMarkers(filePath)) {
+        await this._resolveJSONLFile(filePath);
+        filesResolved++;
+      }
     }
-
-    // Check and resolve specs.jsonl
-    if (fs.existsSync(specsPath) && hasGitConflictMarkers(specsPath)) {
-      await this._resolveJSONLFile(specsPath);
-      filesResolved++;
-    }
-
     return filesResolved;
   }
 

@@ -25,6 +25,7 @@ import {
 import { refreshSpec } from "../services/external-refresh-service.js";
 import * as path from "path";
 import * as fs from "fs";
+import { resolveParentId } from "@sudocode-ai/cli/dist/operations/parents.js";
 
 export function createSpecsRouter(): Router {
   const router = Router();
@@ -141,7 +142,7 @@ export function createSpecsRouter(): Router {
         file_path,
         content: content || "",
         priority: priority !== undefined ? priority : 2,
-        parent_id: parent_id || undefined,
+        parent: resolveParentId(req.project!.db, "spec", parent_id),
       });
 
       // Trigger export to JSONL files
@@ -218,7 +219,7 @@ export function createSpecsRouter(): Router {
       if (title !== undefined) updateInput.title = title;
       if (content !== undefined) updateInput.content = content;
       if (priority !== undefined) updateInput.priority = priority;
-      if (parent_id !== undefined) updateInput.parent_id = parent_id;
+      if (parent_id !== undefined) updateInput.parent = resolveParentId(req.project!.db, "spec", parent_id);
       if (archived !== undefined) {
         updateInput.archived = archived;
         updateInput.archived_at = archived ? new Date().toISOString() : null;

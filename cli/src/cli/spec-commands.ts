@@ -12,12 +12,15 @@ import {
   getSpec,
   listSpecs,
   searchSpecs,
+  updateSpec,
+  type UpdateSpecInput,
 } from "../operations/specs.js";
 import {
   getOutgoingRelationships,
   getIncomingRelationships,
 } from "../operations/relationships.js";
 import { getTags, setTags } from "../operations/tags.js";
+import { resolveParentId } from "../operations/parents.js";
 import { listFeedback } from "../operations/feedback.js";
 import { exportToJSONL } from "../export.js";
 import { writeMarkdownFile } from "../markdown.js";
@@ -67,7 +70,7 @@ export async function handleSpecCreate(
       file_path: filePath,
       content,
       priority: parseInt(options.priority),
-      parent_id: options.parent || undefined,
+      parent: resolveParentId(ctx.db, "spec", options.parent),
     });
 
     // Add tags if provided
@@ -308,8 +311,7 @@ export async function handleSpecUpdate(
     }
 
     // Prepare update
-    const { updateSpec } = await import("../operations/specs.js");
-    const updateData: any = {};
+    const updateData: UpdateSpecInput = {};
 
     if (options.title) {
       updateData.title = options.title;
@@ -321,7 +323,7 @@ export async function handleSpecUpdate(
       updateData.content = options.description;
     }
     if (options.parent !== undefined) {
-      updateData.parent_id = options.parent || undefined;
+      updateData.parent = resolveParentId(ctx.db, "spec", options.parent);
     }
     if (options.archived !== undefined) {
       updateData.archived = options.archived === "true";

@@ -16,7 +16,7 @@ import { broadcastAdrUpdate, broadcastIssueUpdate, broadcastSpecUpdate } from ".
 import { getIssueById } from "./issues.js";
 import { getSpecById } from "./specs.js";
 import { getAdrById } from "./adrs.js";
-import { importFromJSONL } from "@sudocode-ai/cli/dist/import.js";
+import { importTrackedSnapshot } from "@sudocode-ai/cli/dist/import.js";
 import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 import {
   performInitialization,
@@ -97,11 +97,22 @@ export class ProjectManager {
         return Ok(existing);
       }
 
-      // 4. Initialize database (check cache first)
-      const db = await this.getOrCreateDatabase(projectId, projectPath);
+      // 4. Open the database (cached or new) and import the tracked snapshot
+      // into it before any service or watcher uses it. A cached connection
+      // may predate a pull, checkout or edit of the JSONL; serving it would
+      // export its stale rows over the tracked files on the next write.
+      const sudocodeDir = path.join(projectPath, ".sudocode");
+      const db = this.getOrCreateDatabase(projectId, projectPath);
+      try {
+        await importTrackedSnapshot(db, sudocodeDir);
+      } catch (error) {
+        db.close();
+        const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        console.error(`Failed to import the tracked snapshot of ${projectPath}: ${reason}`);
+        return Err({ type: "INVALID_PROJECT", message: reason });
+      }
 
       // 5. Initialize all services for this project
-      const sudocodeDir = path.join(projectPath, ".sudocode");
       const logsStore = new ExecutionLogsStore(db);
       const worktreeConfig = getWorktreeConfig(projectPath);
       const worktreeManager = new WorktreeManager(worktreeConfig);
@@ -555,41 +566,23 @@ export class ProjectManager {
    * Get or create a database connection for a project
    * Checks cache first, then initializes new connection
    */
-  private async getOrCreateDatabase(
+  private getOrCreateDatabase(
     projectId: string,
     projectPath: string
-  ): Promise<Database.Database> {
-    // Check cache
+  ): Database.Database {
     const cached = this.dbCache.get(projectId);
     if (cached) {
       console.log(`Using cached database for ${projectId}`);
-      cached.lastAccessed = new Date();
-
-      // Clear eviction timer since we're using it again
       if (cached.evictionTimer) {
         clearTimeout(cached.evictionTimer);
-        cached.evictionTimer = undefined;
       }
-
-      // Remove from cache (will be managed by project context)
       this.dbCache.delete(projectId);
-
       return cached.db;
     }
 
-    // Initialize new database
     const dbPath = path.join(projectPath, ".sudocode", "cache.db");
     console.log(`Initializing new database for ${projectId} at ${dbPath}`);
-    const db = initDatabase({ path: dbPath });
-    const sudocodeDir = path.join(projectPath, ".sudocode");
-    const hasTrackedEntities = ENTITY_ROWS.some((row) =>
-      fs.existsSync(path.join(sudocodeDir, row.jsonlFile))
-    );
-    if (hasTrackedEntities) {
-      await importFromJSONL(db, { inputDir: sudocodeDir });
-    }
-
-    return db;
+    return initDatabase({ path: dbPath });
   }
 
   /**

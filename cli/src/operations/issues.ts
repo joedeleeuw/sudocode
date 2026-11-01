@@ -5,6 +5,7 @@
 import type Database from "better-sqlite3";
 import type { Issue, IssueStatus } from "../types.js";
 import { generateUUID } from "../id-generator.js";
+import { parentColumns, parentUpdate, type ResolvedParent } from "./parents.js";
 import {
   getIncomingRelationships,
   getOutgoingRelationships,
@@ -33,7 +34,7 @@ export interface CreateIssueInput {
   status?: IssueStatus;
   priority?: number;
   assignee?: string;
-  parent_id?: string;
+  parent?: ResolvedParent;
   archived?: boolean;
   archived_at?: string;
   created_at?: string;
@@ -48,7 +49,7 @@ export interface UpdateIssueInput {
   status?: IssueStatus;
   priority?: number;
   assignee?: string;
-  parent_id?: string;
+  parent?: ResolvedParent;
   archived?: boolean;
   archived_at?: string;
   updated_at?: string;
@@ -73,16 +74,6 @@ export function createIssue(
   db: Database.Database,
   input: CreateIssueInput
 ): Issue {
-  // Validate parent_id exists if provided and get parent_uuid
-  let parent_uuid: string | null = null;
-  if (input.parent_id) {
-    const parent = getIssue(db, input.parent_id);
-    if (!parent) {
-      throw new Error(`Parent issue not found: ${input.parent_id}`);
-    }
-    parent_uuid = parent.uuid;
-  }
-
   const uuid = input.uuid || generateUUID();
 
   // Build INSERT statement with optional timestamp fields
@@ -161,8 +152,7 @@ export function createIssue(
       status: input.status || "open",
       priority: input.priority ?? 2,
       assignee: input.assignee ?? null,
-      parent_id: input.parent_id ?? null,
-      parent_uuid: parent_uuid,
+      ...parentColumns(input.parent ?? null),
       archived: input.archived ? 1 : 0,
       external_links: input.external_links ?? null,
     };
@@ -244,16 +234,6 @@ function writeIssueRow(
     throw new Error(`Issue not found: ${id}`);
   }
 
-  // Validate parent_id exists if provided and resolve its uuid
-  let parent_uuid: string | null = null;
-  if (input.parent_id) {
-    const parent = getIssue(db, input.parent_id);
-    if (!parent) {
-      throw new Error(`Parent issue not found: ${input.parent_id}`);
-    }
-    parent_uuid = parent.uuid;
-  }
-
   const updates: string[] = [];
   const params: Record<string, any> = { id };
 
@@ -298,18 +278,11 @@ function writeIssueRow(
     updates.push("assignee = @assignee");
     params.assignee = input.assignee;
   }
-  if (input.parent_id !== undefined) {
-    if (input.parent_id !== existing.parent_id) {
-      updates.push("parent_id = @parent_id");
-      params.parent_id = input.parent_id;
-    }
-    // parent_uuid has one source, parent_id: whenever a parent_id is
-    // supplied, store its parent's uuid (null when the parent is removed).
-    const nextParentUuid = input.parent_id ? parent_uuid : null;
-    if (nextParentUuid !== (existing.parent_uuid ?? null)) {
-      updates.push("parent_uuid = @parent_uuid");
-      params.parent_uuid = nextParentUuid;
-    }
+  const parentChange =
+    input.parent === undefined ? null : parentUpdate(existing, input.parent);
+  if (parentChange) {
+    updates.push(...parentChange.clauses);
+    Object.assign(params, parentChange.params);
   }
   if (
     input.archived !== undefined &&

@@ -20,6 +20,7 @@ import { refreshIssue } from "../services/external-refresh-service.js";
 import * as path from "path";
 import { findExistingEntityFile } from "@sudocode-ai/cli/dist/filename-generator.js";
 import * as fs from "fs";
+import { resolveParentId } from "@sudocode-ai/cli/dist/operations/parents.js";
 
 export function createIssuesRouter(): Router {
   const router = Router();
@@ -141,7 +142,7 @@ export function createIssuesRouter(): Router {
         status: status || "open",
         priority: priority !== undefined ? priority : 2,
         assignee: assignee || undefined,
-        parent_id: parent_id || undefined,
+        parent: resolveParentId(req.project!.db, "issue", parent_id),
       });
 
       // Trigger export to JSONL files
@@ -225,7 +226,7 @@ export function createIssuesRouter(): Router {
       if (status !== undefined) updateInput.status = status;
       if (priority !== undefined) updateInput.priority = priority;
       if (assignee !== undefined) updateInput.assignee = assignee;
-      if (parent_id !== undefined) updateInput.parent_id = parent_id;
+      if (parent_id !== undefined) updateInput.parent = resolveParentId(req.project!.db, "issue", parent_id);
       if (archived !== undefined) {
         updateInput.archived = archived;
         updateInput.archived_at = archived ? new Date().toISOString() : null;

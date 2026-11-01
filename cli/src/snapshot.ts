@@ -105,6 +105,19 @@ function nullableString(
   return value;
 }
 
+function decodeParentUuid(
+  context: DecodeContext,
+  record: Record<string, unknown>,
+  id: string,
+  parentId: string | undefined
+): string | undefined {
+  const parentUuid = nullableString(context, record, "parent_uuid");
+  if (parentUuid !== undefined && parentId === undefined) {
+    fail(context, "parent_uuid", `${id} names parent ${parentUuid} without a parent_id; a root has neither`);
+  }
+  return parentUuid;
+}
+
 function requiredNumber(
   context: DecodeContext,
   record: Record<string, unknown>,
@@ -374,7 +387,7 @@ function decodeSpec(context: DecodeContext, value: unknown): SpecJSONL {
     created_at: requiredString(context, value, "created_at"),
     updated_at: requiredString(context, value, "updated_at"),
     parent_id: parentId,
-    parent_uuid: nullableString(context, value, "parent_uuid"),
+    parent_uuid: decodeParentUuid(context, value, id, parentId),
     external_links: decodeSnapshotExternalLinks(context, value),
     relationships: decodeRelationships(context, value),
     tags: decodeTags(context, value),
@@ -408,7 +421,7 @@ function decodeIssue(context: DecodeContext, value: unknown): IssueJSONL {
     updated_at: requiredString(context, value, "updated_at"),
     closed_at: nullableString(context, value, "closed_at"),
     parent_id: parentId,
-    parent_uuid: nullableString(context, value, "parent_uuid"),
+    parent_uuid: decodeParentUuid(context, value, id, parentId),
     external_links: decodeSnapshotExternalLinks(context, value),
     relationships: decodeRelationships(context, value),
     tags: decodeTags(context, value),

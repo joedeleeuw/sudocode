@@ -267,7 +267,7 @@ If the editor doesn't open:
 - **Source of Truth**: JSONL files (`.sudocode/specs.jsonl`, `.sudocode/issues.jsonl`, `.sudocode/adrs.jsonl`) committed to git
 - **Local Cache**: Each machine and each git worktree maintains a SQLite cache (`.sudocode/cache.db`, gitignored)
 - **Auto-Export**: SQLite → JSONL after CRUD operations (5-second debounce)
-- **Auto-Import**: JSONL → SQLite before the cache is read or written whenever the JSONL changed since the cache last saw it (fresh clone or worktree, `git pull`, merge, checkout); an export that would delete JSONL entities the cache never imported is refused
+- **Auto-Import**: JSONL → SQLite at every CLI command and every server project open, before the cache is read or written, so a fresh clone or worktree, `git pull`, merge or checkout is always imported; while the server has a project open, its watcher imports JSONL changes; an export that would delete JSONL entities the cache never imported is refused
 - **Conflict Resolution**: Git handles distribution, AI handles merge conflicts
 
 This design provides centralized database semantics through distributed git infrastructure.

@@ -9,7 +9,7 @@ import chalk from "chalk";
 import * as path from "path";
 import * as fs from "fs";
 import { initDatabase } from "./db.js";
-import { importFromJSONL } from "./import.js";
+import { importTrackedSnapshot } from "./import.js";
 import { projectDirectory, ProjectNotFoundError } from "./project.js";
 import type Database from "better-sqlite3";
 
@@ -78,7 +78,6 @@ import {
 } from "./cli/config-commands.js";
 import { getUpdateNotification } from "./update-checker.js";
 import { VERSION } from "./version.js";
-import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 
 // Global state
 let db: Database.Database | null = null;
@@ -127,12 +126,9 @@ type ContextStartup = "database" | "hydrated";
 async function getContext(startup: ContextStartup = "hydrated") {
   if (!db) {
     db = initDB();
-    const hasTrackedEntities = ENTITY_ROWS.some((row) =>
-      fs.existsSync(path.join(outputDir, row.jsonlFile))
-    );
-    if (startup === "hydrated" && hasTrackedEntities) {
+    if (startup === "hydrated") {
       try {
-        await importFromJSONL(db, { inputDir: outputDir });
+        await importTrackedSnapshot(db, outputDir);
       } catch (error) {
         console.error(
           chalk.red(error instanceof Error ? `${error.name}: ${error.message}` : String(error))

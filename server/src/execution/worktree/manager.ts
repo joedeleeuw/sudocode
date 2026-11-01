@@ -35,7 +35,8 @@ import { WorktreeError, WorktreeErrorCode } from "./types.js";
 import { GitCli, type IGitCli } from "./git-cli.js";
 import { wtRemove, wtSwitch } from "./worktrunk-cli.js";
 import { initDatabase } from "@sudocode-ai/cli/dist/db.js";
-import { importFromJSONL } from "@sudocode-ai/cli/dist/import.js";
+import { importTrackedSnapshot } from "@sudocode-ai/cli/dist/import.js";
+import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
 import { execSync } from "child_process";
 
 /**
@@ -357,7 +358,7 @@ export class WorktreeManager implements IWorktreeManager {
     // STEP 1: Copy uncommitted JSONL files from main repo to worktree
     // ================================================================
     // Why: Git worktree checkout only gets committed files from git history.
-    // If the user created new issues/specs before starting the execution,
+    // If the user created new issues/specs/ADRs before starting the execution,
     // those changes are in the main repo's JSONL files but not committed.
     // We need to copy them so the worktree has the complete, up-to-date state.
     //
@@ -366,8 +367,7 @@ export class WorktreeManager implements IWorktreeManager {
     // - Main JSONL: has 140 issues (includes ISSUE-144, uncommitted)
     // - Without this copy: worktree would only have 138 issues, ISSUE-144 missing!
     // - With this copy: worktree gets all 140 issues, execution can reference ISSUE-144
-    const jsonlFiles = ["issues.jsonl", "specs.jsonl"];
-    for (const file of jsonlFiles) {
+    for (const file of ENTITY_ROWS.map((row) => row.jsonlFile)) {
       const mainFile = path.join(mainSudocodeDir, file);
       const worktreeFile = path.join(worktreeSudocodeDir, file);
 
@@ -432,9 +432,7 @@ export class WorktreeManager implements IWorktreeManager {
     const db = initDatabase({ path: worktreeDbPath, verbose: false });
 
     try {
-      await importFromJSONL(db, {
-        inputDir: worktreeSudocodeDir,
-      });
+      await importTrackedSnapshot(db, worktreeSudocodeDir);
       console.debug(
         `[WorktreeManager] Successfully initialized local database in worktree at ${worktreeDbPath}`
       );

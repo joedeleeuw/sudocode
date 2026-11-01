@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { IssueJSONL, IssueStatus, RelationshipJSONL } from "./types.js";
+import type { RelationshipJSONL } from "./types.js";
 import {
   ENTITY_ROWS,
   getEntityTypeFromId,
@@ -8,12 +8,10 @@ import {
   type EntityType,
 } from "@sudocode-ai/types/entities";
 import {
-  blockingPair,
   deleteRelationshipRow,
   EntityNotFoundError,
   insertRelationshipRow,
   listRelationships,
-  statusWithBlocker,
   validateSupersessionEdges,
 } from "./operations/relationships.js";
 import { normalizeMirrorPath } from "./snapshot.js";
@@ -141,56 +139,18 @@ function edgeKey(type: string, fromUuid: string, toUuid: string): string {
   return `${type}:${fromUuid}:${toUuid}`;
 }
 
-function blockedIssueIds(
-  issues: readonly IssueJSONL[],
-  relationships: readonly ProposedRelationship[]
-): Set<string> {
-  const statuses = new Map(issues.map((issue) => [issue.id, issue.status]));
-  const statusOf = (id: string): IssueStatus => {
-    const status = statuses.get(id);
-    if (status === undefined) throw new EntityNotFoundError("issue", id);
-    return status;
-  };
-  const blocked = new Set<string>();
-  for (const { relationship } of relationships) {
-    const pair = blockingPair({
-      from_id: relationship.from,
-      from_type: relationship.from_type,
-      to_id: relationship.to,
-      to_type: relationship.to_type,
-      relationship_type: relationship.type,
-    });
-    if (pair === null) continue;
-    const status = statusOf(pair.blockedId);
-    if (statusWithBlocker(status, statusOf(pair.blockerId)) !== status) {
-      blocked.add(pair.blockedId);
-    }
-  }
-  return blocked;
-}
-
 export interface ProposedState {
   readonly snapshot: EntitySnapshots;
   readonly relationships: readonly ProposedRelationship[];
 }
 
 /**
- * Validate a complete proposed snapshot and derive the state it applies:
- * every issue blocked by an edge of the proposed graph carries that status,
- * so the result depends only on the snapshot, never on the cache it replaces.
+ * Validate a complete proposed snapshot. Import applies it exactly as written:
+ * statuses are stored, never derived, so the result depends only on the
+ * snapshot.
  */
 export function validateProposedSnapshot(snapshot: EntitySnapshots): ProposedState {
-  const relationships = proposedRelationships(snapshot);
-  const blocked = blockedIssueIds(snapshot.issue, relationships);
-  return {
-    snapshot: {
-      ...snapshot,
-      issue: snapshot.issue.map((issue) =>
-        blocked.has(issue.id) ? { ...issue, status: "blocked" } : issue
-      ),
-    },
-    relationships,
-  };
+  return { snapshot, relationships: proposedRelationships(snapshot) };
 }
 
 /**

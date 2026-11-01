@@ -118,9 +118,14 @@ export async function handleResolveConflicts(
     if (!ctx.jsonOutput && !options.dryRun) {
       console.log(chalk.blue(`Resolving conflicts in ${path.basename(filePath)}...`));
     }
-    const resolved = await resolveFile(filePath, entityType, options);
+    const resolved = await resolveConflictedSnapshotFile(
+      filePath,
+      entityType,
+      options,
+      feedbackIds
+    );
     results.push({ file: path.basename(filePath), stats: resolved.stats, entityType });
-    return validateSnapshotEntities(filePath, entityType, resolved.entities, feedbackIds);
+    return resolved.entities;
   };
   const proposed: EntitySnapshots = {
     spec: await proposeRow("spec"),
@@ -216,6 +221,18 @@ async function resolveFile<K extends EntityType>(
   const baseContent = readGitStage(filePath, 1);
   const oursContent = readGitStage(filePath, 2);
   const theirsContent = readGitStage(filePath, 3);
+  const baseStage =
+    baseContent !== null
+      ? decodeSnapshotContent(`${filePath} (git stage 1)`, entityType, baseContent)
+      : null;
+  const oursStage =
+    oursContent !== null
+      ? decodeSnapshotContent(`${filePath} (git stage 2)`, entityType, oursContent)
+      : null;
+  const theirsStage =
+    theirsContent !== null
+      ? decodeSnapshotContent(`${filePath} (git stage 3)`, entityType, theirsContent)
+      : null;
 
   if (options.verbose) {
     console.log(chalk.cyan(`  Attempting to read git stages for: ${filePath}`));
@@ -224,15 +241,11 @@ async function resolveFile<K extends EntityType>(
     console.log(chalk.cyan(`  Theirs stage: ${theirsContent !== null ? 'found' : 'not found'}`));
   }
 
-  if (baseContent !== null && oursContent !== null && theirsContent !== null) {
+  if (baseStage !== null && oursStage !== null && theirsStage !== null) {
     if (options.verbose) {
       console.log(chalk.cyan('  Using three-way merge (YAML-based)'));
     }
-    return mergeThreeWay(
-      decodeSnapshotContent(`${filePath} (git stage 1)`, entityType, baseContent),
-      decodeSnapshotContent(`${filePath} (git stage 2)`, entityType, oursContent),
-      decodeSnapshotContent(`${filePath} (git stage 3)`, entityType, theirsContent)
-    );
+    return mergeThreeWay(baseStage, oursStage, theirsStage);
   }
 
   if (options.verbose) {
@@ -241,6 +254,23 @@ async function resolveFile<K extends EntityType>(
     );
   }
   return resolveEntities([sides.ours, sides.theirs]);
+}
+
+export async function resolveConflictedSnapshotFile<K extends EntityType>(
+  filePath: string,
+  entityType: K,
+  options: ResolveConflictsOptions = {},
+  feedbackIds = new Set<string>()
+): Promise<{ entities: EntitySnapshot<K>[]; stats: ResolutionStats }> {
+  const resolved = await resolveFile(filePath, entityType, options);
+  const entities = validateSnapshotEntities(
+    filePath,
+    entityType,
+    resolved.entities,
+    feedbackIds
+  );
+  validateProposedFile(entityType, entities);
+  return { entities, stats: resolved.stats };
 }
 
 /**

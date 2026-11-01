@@ -25,12 +25,18 @@ import {
 import {
   mergeThreeWay,
   hasGitConflictMarkers,
-  parseMergeConflictFile,
   resolveEntities,
 } from "@sudocode-ai/cli/dist/merge-resolver.js";
-import { writeJSONL, type JSONLEntity } from "@sudocode-ai/cli/dist/jsonl.js";
-import { readEntitySnapshotFile } from "@sudocode-ai/cli/dist/snapshot.js";
-import { ENTITY_ROWS } from "@sudocode-ai/types/entities";
+import { resolveConflictedSnapshotFile } from "@sudocode-ai/cli/dist/cli/merge-commands.js";
+import { writeJSONL } from "@sudocode-ai/cli/dist/jsonl.js";
+import {
+  decodeSnapshotContent,
+  readEntitySnapshotFile,
+  validateSnapshotEntities,
+} from "@sudocode-ai/cli/dist/snapshot.js";
+import { validateProposedFile } from "@sudocode-ai/cli/dist/proposed-graph.js";
+import { ENTITY_ROWS, type EntitySnapshot } from "@sudocode-ai/types/entities";
+import type { EntityType } from "@sudocode-ai/types";
 import * as os from "os";
 
 /**
@@ -553,25 +559,22 @@ export class WorktreeSyncService {
         postMergeContent = fs.readFileSync(fullPath, "utf8");
       }
 
-      // Parse all three versions as JSONL entities
-      const parseJsonl = (content: string): JSONLEntity[] => {
-        if (!content.trim()) return [];
-        return content
-          .split("\n")
-          .filter((line) => line.trim())
-          .map((line) => {
-            try {
-              return JSON.parse(line);
-            } catch {
-              return null;
-            }
-          })
-          .filter((entity): entity is JSONLEntity => entity !== null);
-      };
-
-      const baseEntities = parseJsonl(saved.preCommittedContent);
-      const oursEntities = parseJsonl(saved.uncommittedContent);
-      const theirsEntities = parseJsonl(postMergeContent);
+      const entityType = this._snapshotEntityType(fullPath);
+      const baseEntities = decodeSnapshotContent(
+        `${fullPath} (HEAD)`,
+        entityType,
+        saved.preCommittedContent
+      );
+      const oursEntities = decodeSnapshotContent(
+        `${fullPath} (uncommitted)`,
+        entityType,
+        saved.uncommittedContent
+      );
+      const theirsEntities = decodeSnapshotContent(
+        fullPath,
+        entityType,
+        postMergeContent
+      );
 
       // Perform three-way merge using the merge resolver
       const { entities: merged } = mergeThreeWay(
@@ -579,9 +582,11 @@ export class WorktreeSyncService {
         oursEntities,
         theirsEntities
       );
+      const validated = validateSnapshotEntities(fullPath, entityType, merged);
+      validateProposedFile(entityType, validated);
 
       // Write merged result back to working tree
-      await writeJSONL(fullPath, merged);
+      await writeJSONL(fullPath, validated);
     }
 
     // Clear saved state
@@ -803,18 +808,22 @@ export class WorktreeSyncService {
 
     for (const conflict of jsonlConflicts) {
       try {
+        const entityType = this._snapshotEntityType(conflict.filePath);
         // Read three versions of the file
         const baseVersion = await this._readJSONLVersion(
           conflict.filePath,
-          mergeBase
+          mergeBase,
+          entityType
         );
         const ourVersion = await this._readJSONLVersion(
           conflict.filePath,
-          execution.target_branch
+          execution.target_branch,
+          entityType
         );
         const theirVersion = await this._readJSONLVersion(
           conflict.filePath,
-          execution.branch_name
+          execution.branch_name,
+          entityType
         );
 
         // Perform three-way merge
@@ -826,7 +835,13 @@ export class WorktreeSyncService {
 
         // Write resolved version to local repo
         const resolvedPath = path.join(this.repoPath, conflict.filePath);
-        await writeJSONL(resolvedPath, merged);
+        const validated = validateSnapshotEntities(
+          resolvedPath,
+          entityType,
+          merged
+        );
+        validateProposedFile(entityType, validated);
+        await writeJSONL(resolvedPath, validated);
 
         // Stage the resolved file
         execSync(`git add ${this._escapeShellArg(conflict.filePath)}`, {
@@ -850,10 +865,11 @@ export class WorktreeSyncService {
    * @param revision - Git revision (commit SHA or branch name)
    * @returns Array of JSONL entities
    */
-  private async _readJSONLVersion(
+  private async _readJSONLVersion<K extends EntityType>(
     filePath: string,
-    revision: string
-  ): Promise<any[]> {
+    revision: string,
+    entityType: K
+  ): Promise<EntitySnapshot<K>[]> {
     try {
       // Get file content at revision using git show
       const content = execSync(
@@ -865,11 +881,11 @@ export class WorktreeSyncService {
         }
       );
 
-      // Parse JSONL content
-      const lines = content
-        .split("\n")
-        .filter((line) => line.trim().length > 0);
-      return lines.map((line) => JSON.parse(line));
+      return decodeSnapshotContent(
+        `${filePath} (${revision})`,
+        entityType,
+        content
+      );
     } catch (error: any) {
       // File might not exist at this revision (new file)
       if (error.status === 128) {
@@ -1154,28 +1170,39 @@ export class WorktreeSyncService {
    * @param localFilePath - Absolute path to local JSONL file
    * @param worktreeFilePath - Absolute path to worktree JSONL file
    */
+  private _snapshotEntityType(filePath: string): EntityType {
+    const row = ENTITY_ROWS.find(
+      (candidate) => candidate.jsonlFile === path.basename(filePath)
+    );
+    if (!row) {
+      throw new Error(
+        `${filePath} is not a sudocode entity snapshot (${ENTITY_ROWS.map((candidate) => candidate.jsonlFile).join(", ")}); merge it by hand`
+      );
+    }
+    return row.type;
+  }
+
   private async _mergeJSONLFiles(
     localFilePath: string,
     worktreeFilePath: string
   ): Promise<void> {
-    const row = ENTITY_ROWS.find(
-      (candidate) => candidate.jsonlFile === path.basename(localFilePath)
-    );
-    if (!row) {
-      throw new Error(
-        `${localFilePath} is not a sudocode entity snapshot (${ENTITY_ROWS.map((candidate) => candidate.jsonlFile).join(", ")}); merge it by hand`
-      );
-    }
-    const localEntities = readEntitySnapshotFile(localFilePath, row.type);
-    const worktreeEntities = readEntitySnapshotFile(worktreeFilePath, row.type);
+    const entityType = this._snapshotEntityType(localFilePath);
+    const localEntities = readEntitySnapshotFile(localFilePath, entityType);
+    const worktreeEntities = readEntitySnapshotFile(worktreeFilePath, entityType);
 
-    const { entities: merged } = resolveEntities<JSONLEntity>([
+    const { entities: merged } = resolveEntities([
       localEntities,
       worktreeEntities,
     ]);
+    const validated = validateSnapshotEntities(
+      localFilePath,
+      entityType,
+      merged
+    );
+    validateProposedFile(entityType, validated);
 
     // Write merged result back to local file
-    await writeJSONL(localFilePath, merged);
+    await writeJSONL(localFilePath, validated);
   }
 
   /**
@@ -1299,169 +1326,42 @@ export class WorktreeSyncService {
    */
   private async _resolveJSONLConflicts(): Promise<number> {
     const sudocodePath = path.join(this.repoPath, ".sudocode");
-    let filesResolved = 0;
-    for (const row of ENTITY_ROWS) {
+    const conflicted = ENTITY_ROWS.filter((row) => {
       const filePath = path.join(sudocodePath, row.jsonlFile);
-      if (fs.existsSync(filePath) && hasGitConflictMarkers(filePath)) {
-        await this._resolveJSONLFile(filePath);
-        filesResolved++;
-      }
-    }
-    return filesResolved;
-  }
-
-  /**
-   * Resolve conflicts in a single JSONL file
-   *
-   * Uses three-way merge when we have base/ours/theirs versions from git.
-   * This enables proper three-way merge semantics with YAML-based line-level merging.
-   *
-   * @param filePath - Path to the JSONL file with conflicts
-   */
-  private async _resolveJSONLFile(filePath: string): Promise<void> {
-    // Read file with conflict markers
-    const content = fs.readFileSync(filePath, "utf8");
-
-    // Parse conflicts
-    const sections = parseMergeConflictFile(content);
-
-    // Try to use three-way merge by getting base/ours/theirs from git
-    // This is more accurate than parsing conflict markers
-    const relativePath = path.relative(this.repoPath, filePath);
-
-    try {
-      // Get base version from merge-base (git stage 1)
-      let baseEntities: JSONLEntity[] = [];
-      try {
-        // Note: Using execSync with _escapeShellArg for consistency with rest of file
-        const baseContent = execSync(
-          `git show :1:${this._escapeShellArg(relativePath)}`,
-          {
-            cwd: this.repoPath,
-            encoding: "utf8",
-            stdio: "pipe",
-          }
-        );
-        baseEntities = this._parseJSONLContent(baseContent);
-      } catch {
-        // No base version (new file or file didn't exist at merge-base)
-        baseEntities = [];
-      }
-
-      // Get ours version (git stage 2)
-      let oursEntities: JSONLEntity[] = [];
-      try {
-        const oursContent = execSync(
-          `git show :2:${this._escapeShellArg(relativePath)}`,
-          {
-            cwd: this.repoPath,
-            encoding: "utf8",
-            stdio: "pipe",
-          }
-        );
-        oursEntities = this._parseJSONLContent(oursContent);
-      } catch {
-        // No ours version
-        oursEntities = [];
-      }
-
-      // Get theirs version (git stage 3)
-      let theirsEntities: JSONLEntity[] = [];
-      try {
-        const theirsContent = execSync(
-          `git show :3:${this._escapeShellArg(relativePath)}`,
-          {
-            cwd: this.repoPath,
-            encoding: "utf8",
-            stdio: "pipe",
-          }
-        );
-        theirsEntities = this._parseJSONLContent(theirsContent);
-      } catch {
-        // No theirs version
-        theirsEntities = [];
-      }
-
-      // If we have at least ours and theirs (or base), use three-way merge
-      // This provides proper three-way semantics with YAML-based line-level merging
-      if (oursEntities.length > 0 || theirsEntities.length > 0 || baseEntities.length > 0) {
-        const { entities: resolved } = mergeThreeWay(
-          baseEntities,
-          oursEntities,
-          theirsEntities
-        );
-
-        // Write back resolved entities
-        await writeJSONL(filePath, resolved);
-
-        // Stage the resolved file
-        execSync(`git add ${this._escapeShellArg(relativePath)}`, {
-          cwd: this.repoPath,
-          stdio: "pipe",
-        });
-
-        return;
-      }
-    } catch (error) {
-      // If three-way merge fails, fall back to two-way resolution below
-      console.warn(`Three-way merge failed for ${relativePath}, using fallback resolution:`, error);
-    }
-
-    // Fallback: Use two-way resolution from conflict markers
-    // This is used when git stages are not available (manual conflict resolution)
-    const oursEntities: JSONLEntity[] = [];
-    const theirsEntities: JSONLEntity[] = [];
-    const parseLines = (lines: string[]): JSONLEntity[] =>
-      this._parseJSONLContent(lines.join("\n"));
-
-    for (const section of sections) {
-      if (section.type === "clean") {
-        const clean = parseLines(section.lines);
-        oursEntities.push(...clean);
-        theirsEntities.push(...clean);
-      } else {
-        oursEntities.push(...parseLines(section.ours || []));
-        theirsEntities.push(...parseLines(section.theirs || []));
-      }
-    }
-
-    const { entities: resolved } = resolveEntities([
-      oursEntities,
-      theirsEntities,
-    ]);
-
-    // Write back resolved entities
-    await writeJSONL(filePath, resolved);
-
-    // Stage the resolved file
-    execSync(`git add ${this._escapeShellArg(relativePath)}`, {
-      cwd: this.repoPath,
-      stdio: "pipe",
+      return fs.existsSync(filePath) && hasGitConflictMarkers(filePath);
     });
-  }
+    if (conflicted.length === 0) {
+      return 0;
+    }
 
-  /**
-   * Parse JSONL content into entities
-   *
-   * Helper function for parsing JSONL content from git or files.
-   *
-   * @param content - JSONL content as string
-   * @returns Array of parsed entities
-   */
-  private _parseJSONLContent(content: string): JSONLEntity[] {
-    if (!content.trim()) return [];
+    const feedbackIds = new Set<string>();
+    const resolvedFiles: Array<{
+      filePath: string;
+      relativePath: string;
+      entities: EntitySnapshot<EntityType>[];
+    }> = [];
 
-    return content
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter((entity): entity is JSONLEntity => entity !== null);
+    for (const row of conflicted) {
+      const filePath = path.join(sudocodePath, row.jsonlFile);
+      const relativePath = path.relative(this.repoPath, filePath);
+      const { entities } = await resolveConflictedSnapshotFile(
+        filePath,
+        row.type,
+        {},
+        feedbackIds
+      );
+      resolvedFiles.push({ filePath, relativePath, entities });
+    }
+
+    for (const resolved of resolvedFiles) {
+      await writeJSONL(resolved.filePath, resolved.entities);
+      execSync(`git add ${this._escapeShellArg(resolved.relativePath)}`, {
+        cwd: this.repoPath,
+        stdio: "pipe",
+      });
+    }
+
+    return resolvedFiles.length;
   }
 
   /**

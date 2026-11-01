@@ -193,15 +193,15 @@ export function mergeYamlContent(input: MergeInput): MergeResult {
  */
 export function readGitStage(filePath: string, stage: 1 | 2 | 3): string | null {
   try {
-    // Convert absolute path to relative path from repo root
-    let relativePath = filePath;
-    if (path.isAbsolute(filePath)) {
-      const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-      relativePath = path.relative(repoRoot, filePath);
-    }
+    const cwd = path.isAbsolute(filePath) ? path.dirname(filePath) : undefined;
+    const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const relativePath = path.isAbsolute(filePath)
+      ? path.relative(repoRoot, filePath)
+      : filePath;
 
     // Use git checkout-index to extract stage to temp file
     // This avoids buffer size limits by having git write directly to disk
@@ -211,9 +211,8 @@ export function readGitStage(filePath: string, stage: 1 | 2 | 3): string | null 
       ['checkout-index', `--stage=${stage}`, '--temp', relativePath],
       {
         encoding: 'utf8',
-        cwd: path.isAbsolute(filePath) 
-          ? execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
-          : undefined,
+        cwd: repoRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
       }
     ).trim();
 
@@ -223,10 +222,6 @@ export function readGitStage(filePath: string, stage: 1 | 2 | 3): string | null 
       return null;
     }
 
-    // Get repo root to resolve temp file path (git outputs relative to repo root)
-    const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-    }).trim();
     const tempFilePath = path.join(repoRoot, tempFile);
 
     try {

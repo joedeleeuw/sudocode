@@ -772,16 +772,12 @@ export async function importFromJSONL(
 
 /**
  * Import a project's tracked snapshot into its cache: the one import every
- * open runs (each CLI command, each server project open) before anything
- * reads or exports the cache. A project with no entity JSONL yet has nothing
- * to import.
+ * open runs (each CLI command, each server project open, each worktree setup)
+ * before anything reads or exports the cache.
  */
 export async function importTrackedSnapshot(
   db: Database.Database,
   sudocodeDir: string
-): Promise<ImportResult | null> {
-  const tracked = ENTITY_ROWS.some((row) =>
-    fs.existsSync(path.join(sudocodeDir, row.jsonlFile))
-  );
-  return tracked ? importFromJSONL(db, { inputDir: sudocodeDir }) : null;
+): Promise<ImportResult> {
+  return importFromJSONL(db, { inputDir: sudocodeDir });
 }

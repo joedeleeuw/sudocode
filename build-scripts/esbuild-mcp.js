@@ -71,7 +71,7 @@ async function build() {
     entryPoints: [path.join(rootDir, 'mcp/src/index.ts')],
     bundle: true,
     platform: 'node',
-    target: 'node22',
+    target: 'node26',
     format: 'cjs',
     outfile: path.join(rootDir, 'dist/sea/mcp-bundle.js'),
     external: [...nodeBuiltins],

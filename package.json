@@ -4,6 +4,9 @@
   "private": true,
   "description": "Git-native spec and issue management for AI-assisted software development",
   "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
   "workspaces": [
     "types",
     "cli",

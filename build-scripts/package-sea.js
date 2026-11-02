@@ -26,7 +26,7 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 
-const NODE_VERSION = 'v22.12.0';
+const NODE_VERSION = 'v26.13.0';
 
 const PLATFORMS = {
   'linux-x64': {
@@ -208,13 +208,13 @@ async function downloadSqlitePrebuilt(platform, targetDir) {
   // Determine the prebuild filename based on platform
   // better-sqlite3 prebuilds are published to GitHub releases
   // Format: better-sqlite3-v{version}-node-v{abi}-{os}-{arch}.tar.gz
-  // Node 22 ABI = 127
+  // Node 26 ABI = 147
 
   const betterSqliteVersion = JSON.parse(
     fs.readFileSync(path.join(rootDir, 'node_modules/better-sqlite3/package.json'), 'utf8')
   ).version;
 
-  const abi = '127'; // Node 22 ABI
+  const abi = '147'; // Node 26 ABI
 
   // Map our platform names to prebuild names
   const platformMap = {

@@ -131,7 +131,7 @@ export class WhisperLocalProvider implements STTProvider {
     const formData = new FormData();
 
     // Create a Blob from the Buffer
-    const audioBlob = new Blob([audio], { type: "audio/webm" });
+    const audioBlob = new Blob([new Uint8Array(audio)], { type: "audio/webm" });
     formData.set("file", audioBlob, "audio.webm");
     formData.set("model", this.config.model);
 

@@ -25,7 +25,13 @@ import {
   feedbackToJSONL,
   listSnapshotFeedback,
 } from "./operations/feedback.js";
-import { writeJSONL } from "./jsonl.js";
+import {
+  sortExternalLinks,
+  sortFeedback,
+  sortRelationships,
+  sortTags,
+  writeJSONL,
+} from "./jsonl.js";
 import { decodeSnapshotContent } from "./snapshot.js";
 import {
   digestJSONLContent,
@@ -51,45 +57,6 @@ export interface ExportOptions {
   specsFile?: string;
   issuesFile?: string;
   adrsFile?: string;
-}
-
-/**
- * Sort relationships for deterministic JSONL output
- * Sorts by: to_id, then to_type, then relationship type
- */
-function sortRelationships(rels: RelationshipJSONL[]): RelationshipJSONL[] {
-  return [...rels].sort((a, b) => {
-    if (a.to !== b.to) return a.to.localeCompare(b.to);
-    if (a.to_type !== b.to_type) return a.to_type.localeCompare(b.to_type);
-    return a.type.localeCompare(b.type);
-  });
-}
-
-/**
- * Sort tags alphabetically for deterministic JSONL output
- */
-function sortTags(tags: string[]): string[] {
-  return [...tags].sort((a, b) => a.localeCompare(b));
-}
-
-/**
- * Sort feedback for deterministic JSONL output
- * Sorts by: id (stable identifier)
- */
-function sortFeedback(feedback: FeedbackJSONL[]): FeedbackJSONL[] {
-  return [...feedback].sort((a, b) => a.id.localeCompare(b.id));
-}
-
-/**
- * Sort external links for deterministic JSONL output
- * Sorts by: provider, then external_id
- */
-function sortExternalLinks(links: ExternalLink[] | undefined): ExternalLink[] | undefined {
-  if (!links || links.length === 0) return links;
-  return [...links].sort((a, b) => {
-    if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
-    return a.external_id.localeCompare(b.external_id);
-  });
 }
 
 interface EntityJSONLMetadata {

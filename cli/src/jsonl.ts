@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as readline from "readline";
 import * as path from "path";
 import type { EntitySnapshot } from "@sudocode-ai/types/entities";
+import type { ExternalLink, FeedbackJSONL, RelationshipJSONL } from "./types.js";
 
 export type JSONLEntity = EntitySnapshot;
 
@@ -130,27 +131,10 @@ export function readJSONLSync<T = JSONLEntity>(
 }
 
 /**
- * Write entities to a JSONL file
- * Each entity is written as a single line of JSON
- * Entities are sorted by created_at date to minimize merge conflicts
+ * Sort entities by created_at date to minimize merge conflicts
  */
-export async function writeJSONL<T = JSONLEntity>(
-  filePath: string,
-  entities: T[],
-  options: WriteJSONLOptions = {}
-): Promise<void> {
-  const { atomic = true } = options;
-
-  // Ensure directory exists
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  const targetPath = atomic ? `${filePath}.tmp` : filePath;
-
-  // Sort entities by created_at date to minimize merge conflicts
-  const sortedEntities = [...entities].sort((a, b) => {
+function sortByCreatedAt<T>(entities: T[]): T[] {
+  return [...entities].sort((a, b) => {
     const aDate = (a as any).created_at;
     const bDate = (b as any).created_at;
 
@@ -173,10 +157,128 @@ export async function writeJSONL<T = JSONLEntity>(
     const bId = (b as any).id || "";
     return aId < bId ? -1 : aId > bId ? 1 : 0;
   });
+}
 
-  // Write each entity as a line
-  const lines = sortedEntities.map((entity) => JSON.stringify(entity));
-  const content = lines.join("\n") + "\n";
+/**
+ * Sort relationships for deterministic JSONL output
+ * Sorts by: to_id, then to_type, then relationship type
+ */
+export function sortRelationships(rels: RelationshipJSONL[]): RelationshipJSONL[] {
+  return [...rels].sort((a, b) => {
+    if (a.to !== b.to) return a.to.localeCompare(b.to);
+    if (a.to_type !== b.to_type) return a.to_type.localeCompare(b.to_type);
+    return a.type.localeCompare(b.type);
+  });
+}
+
+/**
+ * Sort tags alphabetically for deterministic JSONL output
+ */
+export function sortTags(tags: string[]): string[] {
+  return [...tags].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Sort feedback for deterministic JSONL output
+ * Sorts by: id (stable identifier)
+ */
+export function sortFeedback(feedback: FeedbackJSONL[]): FeedbackJSONL[] {
+  return [...feedback].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Sort external links for deterministic JSONL output
+ * Sorts by: provider, then external_id
+ */
+export function sortExternalLinks(links: ExternalLink[] | undefined): ExternalLink[] | undefined {
+  if (!links || links.length === 0) return links;
+  return [...links].sort((a, b) => {
+    if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
+    return a.external_id.localeCompare(b.external_id);
+  });
+}
+
+/**
+ * Values the persisted record holds where a decoded snapshot leaves a field undefined.
+ * The persisted form is the database row that export writes: nullable columns are
+ * explicit nulls and archived is the 0/1 column.
+ */
+const ENTITY_UNSET: Record<string, null | 0> = {
+  assignee: null,
+  archived: 0,
+  archived_at: null,
+  closed_at: null,
+  parent_id: null,
+  parent_uuid: null,
+};
+const FEEDBACK_UNSET: Record<string, null | false> = {
+  from_id: null,
+  agent: null,
+  anchor: null,
+  dismissed: false,
+};
+
+function fillUnset<T extends object>(record: T, unset: Record<string, unknown>): T {
+  const filled: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    filled[key] = value === undefined && key in unset ? unset[key] : value;
+  }
+  return filled as T;
+}
+
+/**
+ * The one persisted form of a snapshot record, whichever path produced it.
+ * Export writes database rows; merge, conflict resolution and worktree sync write
+ * decoded snapshots. Without this they disagree on nulls, archived and array order,
+ * and every write by one rewrites every record the other wrote.
+ */
+function canonicalRecord<T>(entity: T): T {
+  if (typeof entity !== "object" || entity === null) return entity;
+  const record = fillUnset(entity as Record<string, unknown>, ENTITY_UNSET);
+  if (typeof record.archived === "boolean") record.archived = record.archived ? 1 : 0;
+  if (Array.isArray(record.relationships)) {
+    record.relationships = sortRelationships(record.relationships as RelationshipJSONL[]);
+  }
+  if (Array.isArray(record.tags)) record.tags = sortTags(record.tags as string[]);
+  if (Array.isArray(record.external_links)) {
+    record.external_links = sortExternalLinks(record.external_links as ExternalLink[]);
+  }
+  if (Array.isArray(record.feedback)) {
+    const feedback = record.feedback as FeedbackJSONL[];
+    record.feedback =
+      feedback.length > 0
+        ? sortFeedback(feedback.map((entry) => fillUnset(entry, FEEDBACK_UNSET)))
+        : undefined;
+  }
+  return record as T;
+}
+
+function serializeJSONL<T>(entities: T[]): string {
+  return entities.map((entity) => JSON.stringify(canonicalRecord(entity))).join("\n") + "\n";
+}
+
+/**
+ * Write entities to a JSONL file
+ * Each entity is written as a single line of JSON
+ * Entities are sorted by created_at date to minimize merge conflicts
+ */
+export async function writeJSONL<T = JSONLEntity>(
+  filePath: string,
+  entities: T[],
+  options: WriteJSONLOptions = {}
+): Promise<void> {
+  const { atomic = true } = options;
+
+  // Ensure directory exists
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const targetPath = atomic ? `${filePath}.tmp` : filePath;
+
+  const sortedEntities = sortByCreatedAt(entities);
+  const content = serializeJSONL(sortedEntities);
 
   // Check if content has actually changed before writing
   // This prevents unnecessary file writes that trigger watcher events
@@ -241,34 +343,8 @@ export function writeJSONLSync<T = JSONLEntity>(
 
   const targetPath = atomic ? `${filePath}.tmp` : filePath;
 
-  // Sort entities by created_at date to minimize merge conflicts
-  const sortedEntities = [...entities].sort((a, b) => {
-    const aDate = (a as any).created_at;
-    const bDate = (b as any).created_at;
-
-    // Handle missing created_at fields - put them at the end
-    if (!aDate && !bDate) {
-      // Both missing dates, sort by ID
-      const aId = (a as any).id || "";
-      const bId = (b as any).id || "";
-      return aId < bId ? -1 : aId > bId ? 1 : 0;
-    }
-    if (!aDate) return 1;
-    if (!bDate) return -1;
-
-    // Compare dates as strings (ISO 8601 format sorts lexicographically)
-    if (aDate < bDate) return -1;
-    if (aDate > bDate) return 1;
-
-    // If dates are equal, fall back to ID comparison
-    const aId = (a as any).id || "";
-    const bId = (b as any).id || "";
-    return aId < bId ? -1 : aId > bId ? 1 : 0;
-  });
-
-  // Write each entity as a line
-  const lines = sortedEntities.map((entity) => JSON.stringify(entity));
-  const content = lines.join("\n") + "\n";
+  const sortedEntities = sortByCreatedAt(entities);
+  const content = serializeJSONL(sortedEntities);
 
   // Check if content has actually changed before writing
   // This prevents unnecessary file writes that trigger watcher events

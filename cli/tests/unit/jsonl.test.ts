@@ -17,6 +17,7 @@ import {
   getJSONLEntity,
   getJSONLEntitySync,
 } from "../../src/jsonl.js";
+import { decodeSnapshotContent } from "../../src/snapshot.js";
 
 const TEST_DIR = path.join(process.cwd(), "test-temp");
 const TEST_FILE = path.join(TEST_DIR, "test.jsonl");
@@ -459,6 +460,77 @@ describe("JSONL Operations", () => {
       const entity = getJSONLEntitySync<TestEntity>(TEST_FILE, "1");
       expect(entity).not.toBeNull();
       expect(entity?.name).toBe("First");
+    });
+  });
+  describe("persisted record form", () => {
+    // The form export writes: table columns with explicit nulls, archived as 0/1,
+    // and feedback sorted by id (here the later-created entry has the lower id).
+    const exportedIssue = JSON.stringify({
+      id: "i-abcd",
+      uuid: "00000000-0000-4000-8000-000000000001",
+      title: "Exported issue",
+      content: "",
+      status: "open",
+      priority: 2,
+      assignee: null,
+      archived: 0,
+      archived_at: null,
+      created_at: "2026-01-01 00:00:00",
+      updated_at: "2026-01-02 00:00:00",
+      closed_at: null,
+      parent_id: null,
+      parent_uuid: null,
+      relationships: [],
+      tags: ["a", "b"],
+      feedback: [
+        {
+          id: "0aaa",
+          from_id: "i-abcd",
+          to_id: "i-abcd",
+          feedback_type: "comment",
+          content: "second",
+          agent: null,
+          anchor: null,
+          dismissed: false,
+          created_at: "2026-01-02T00:00:00.000Z",
+          updated_at: "2026-01-02T00:00:00.000Z",
+        },
+        {
+          id: "ffff",
+          from_id: "i-abcd",
+          to_id: "i-abcd",
+          feedback_type: "comment",
+          content: "first",
+          agent: "me",
+          anchor: null,
+          dismissed: false,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    it("writes a decoded snapshot back byte-for-byte as export wrote it", async () => {
+      // Merge, conflict resolution and worktree sync write decoded snapshots.
+      const decoded = decodeSnapshotContent(TEST_FILE, "issue", exportedIssue);
+      decoded[0].feedback!.reverse();
+      decoded[0].tags.reverse();
+
+      await writeJSONL(TEST_FILE, decoded);
+      expect(fs.readFileSync(TEST_FILE, "utf8")).toBe(exportedIssue + "\n");
+
+      writeJSONLSync(TEST_FILE, decoded);
+      expect(fs.readFileSync(TEST_FILE, "utf8")).toBe(exportedIssue + "\n");
+    });
+
+    it("writes archived as the 0/1 column", async () => {
+      const decoded = decodeSnapshotContent(
+        TEST_FILE,
+        "issue",
+        exportedIssue.replace('"archived":0', '"archived":true'),
+      );
+      await writeJSONL(TEST_FILE, decoded);
+      expect(JSON.parse(fs.readFileSync(TEST_FILE, "utf8")).archived).toBe(1);
     });
   });
 });

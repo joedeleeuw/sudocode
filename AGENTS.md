@@ -19,7 +19,8 @@ each new worktree, together with `node_modules`, as listed in `.worktreeinclude`
 
 Run `node scripts/release-fork.ts 0.2.0-joe.N <notes.md>` from a clean checkout of the commit to
 release; it publishes the GitHub release that dotfiles pins. Then bump the dotfiles pin (`source`,
-`version`, `pinReason`) and install with `scripts/install-clis.sh --only sudocode`.
+`version`, `pinReason`) in `home/clis.json`, land it on dotfiles `main` and run `dotfiles sync user` on each
+workstation; Home Manager installs the npm row into `~/.local/share/dotfiles/npm-clis`.
 `scripts/version.sh` and `scripts/publish.sh` are upstream's npm flow; the fork does not publish to
 npm.
 
